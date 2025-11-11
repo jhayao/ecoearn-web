@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Upload, QrCode, Trash2, Check } from 'lucide-react';
+import { Upload, QrCode, Trash2, Check, Copy } from 'lucide-react';
 import { AdminService } from '@/lib/admin-service';
 
 // Image compression function
@@ -60,8 +60,10 @@ const BinForm: React.FC<BinFormProps> = ({ onBinAdded }) => {
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [qrData, setQrData] = useState<string | null>(null);
+  const [apiKey, setApiKey] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingQR, setIsGeneratingQR] = useState(false);
+  const [apiKeyCopied, setApiKeyCopied] = useState(false);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -125,7 +127,7 @@ const BinForm: React.FC<BinFormProps> = ({ onBinAdded }) => {
         const base64Image = e.target?.result as string;
         const base64Data = base64Image.split(',')[1]; // Remove data:image/jpeg;base64, prefix
 
-        await adminService.addBin({
+        const binId = await adminService.addBin({
           name: formData.name,
           lat: parseFloat(formData.latitude),
           lng: parseFloat(formData.longitude),
@@ -134,14 +136,23 @@ const BinForm: React.FC<BinFormProps> = ({ onBinAdded }) => {
           qrData: qrData,
         });
 
-        // Reset form
+        // Get the created bin to retrieve the API key
+        const createdBin = await adminService.getBinById(binId);
+        if (createdBin?.apiKey) {
+          setApiKey(createdBin.apiKey);
+          // Don't reset form immediately - let user see and copy API key
+          alert(`Bin added successfully!\n\nAPI Key: ${createdBin.apiKey}\n\nPlease save this API key for your IoT device.\n\nThe API key will remain visible below until you clear the form.`);
+        } else {
+          alert('Bin added successfully!');
+        }
+
+        // Only reset these fields, keep apiKey visible
         setFormData({ name: '', latitude: '', longitude: '', level: '' });
         setSelectedImage(null);
         setImagePreview(null);
         setQrData(null);
         
         onBinAdded();
-        alert('Bin added successfully!');
       };
       reader.readAsDataURL(compressedImage);
     } catch (error) {
@@ -157,6 +168,16 @@ const BinForm: React.FC<BinFormProps> = ({ onBinAdded }) => {
     setSelectedImage(null);
     setImagePreview(null);
     setQrData(null);
+    setApiKey(null);
+    setApiKeyCopied(false);
+  };
+
+  const handleCopyApiKey = () => {
+    if (apiKey) {
+      navigator.clipboard.writeText(apiKey);
+      setApiKeyCopied(true);
+      setTimeout(() => setApiKeyCopied(false), 2000);
+    }
   };
 
   return (
@@ -275,6 +296,38 @@ const BinForm: React.FC<BinFormProps> = ({ onBinAdded }) => {
             </div>
           )}
         </div>
+
+        {/* API Key Display */}
+        {apiKey && (
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <h4 className="text-sm font-semibold text-blue-900 mb-2">🔑 IoT Device API Key</h4>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-white p-3 rounded border border-blue-300">
+                <code className="text-xs text-blue-800 break-all font-mono">{apiKey}</code>
+              </div>
+              <button
+                onClick={handleCopyApiKey}
+                className="p-3 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors flex items-center gap-1"
+                title="Copy API Key"
+              >
+                {apiKeyCopied ? (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span className="text-xs">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span className="text-xs">Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="text-xs text-blue-600 mt-2">
+              ⚠️ <strong>Important:</strong> Save this API key now! You won't be able to retrieve it later. Use it in your IoT device configuration.
+            </p>
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="flex space-x-3">

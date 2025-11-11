@@ -28,6 +28,15 @@ export interface Bin {
   status: 'active' | 'inactive';
   currentUser?: string; // User ID who scanned the QR code
   createdAt: Timestamp;
+  apiKey?: string; // API key for IoT device authentication
+  // IoT capacity monitoring
+  comp1Capacity?: number; // Compartment 1 capacity (0-100%)
+  comp2Capacity?: number; // Compartment 2 capacity (0-100%)
+  lastCapacityUpdate?: Timestamp; // Last capacity update timestamp
+  // IoT heartbeat & online status
+  lastHeartbeat?: Timestamp; // Last heartbeat from IoT device
+  onlineStatus?: 'online' | 'offline'; // Current online status
+  deviceStatus?: string; // Device status: 'active', 'idle', 'error', etc.
   // Legacy fields for backward compatibility
   lat?: number;
   lng?: number;
@@ -174,15 +183,26 @@ export class AdminService {
     this.unreadNotificationCount = 0;
   }
 
+  // Generate a unique API key for IoT devices
+  private generateApiKey(): string {
+    const timestamp = Date.now().toString(36);
+    const randomStr = Math.random().toString(36).substring(2, 15);
+    const randomStr2 = Math.random().toString(36).substring(2, 15);
+    return `BIN_${timestamp}_${randomStr}${randomStr2}`.toUpperCase();
+  }
+
   // Bin Management
-  async addBin(binData: Omit<Bin, 'id' | 'createdAt' | 'status' | 'currentUser'>): Promise<string> {
+  async addBin(binData: Omit<Bin, 'id' | 'createdAt' | 'status' | 'currentUser' | 'apiKey'>): Promise<string> {
     try {
+      const apiKey = this.generateApiKey();
       const docRef = await addDoc(collection(db, 'bins'), {
         ...binData,
         status: 'inactive',
+        apiKey: apiKey,
         createdAt: serverTimestamp(),
       });
       
+      console.log(`Bin created with API Key: ${apiKey}`);
       return docRef.id;
     } catch (error) {
       throw new Error(`Failed to add bin: ${error}`);
@@ -232,7 +252,12 @@ export class AdminService {
       await updateDoc(binRef, {
         status: 'inactive',
         currentUser: null,
+        // CRITICAL: Send DEACTIVATE_BIN command to ESP32
+        pendingCommand: 'DEACTIVATE_BIN',
+        pendingCommandTimestamp: serverTimestamp()
       });
+      
+      console.log(`[Deactivate] Set DEACTIVATE_BIN command for bin ${binId}`);
     } catch (error) {
       throw new Error(`Failed to deactivate bin for user: ${error}`);
     }
@@ -261,6 +286,72 @@ export class AdminService {
       await updateDoc(binRef, updateData);
     } catch (error) {
       throw new Error(`Failed to update bin: ${error}`);
+    }
+  }
+
+  // Verify API key and get bin ID
+  async verifyApiKey(apiKey: string): Promise<string | null> {
+    try {
+      const snapshot = await getDocs(
+        query(collection(db, 'bins'), where('apiKey', '==', apiKey))
+      );
+      
+      if (snapshot.empty) {
+        return null;
+      }
+      
+      return snapshot.docs[0].id;
+    } catch (error) {
+      console.error('Error verifying API key:', error);
+      return null;
+    }
+  }
+
+  // Update bin location from IoT device
+  async updateBinLocation(apiKey: string, latitude: number, longitude: number): Promise<boolean> {
+    try {
+      const binId = await this.verifyApiKey(apiKey);
+      
+      if (!binId) {
+        console.error('Invalid API key');
+        return false;
+      }
+      
+      const binRef = doc(db, 'bins', binId);
+      await updateDoc(binRef, {
+        lat: latitude,
+        lng: longitude,
+      });
+      
+      console.log(`Updated bin ${binId} location: ${latitude}, ${longitude}`);
+      return true;
+    } catch (error) {
+      console.error('Error updating bin location:', error);
+      return false;
+    }
+  }
+
+  // Update bin capacity from IoT device
+  async updateBinCapacity(apiKey: string, comp1Capacity: number, comp2Capacity: number): Promise<{ success: boolean; binId?: string; error?: string }> {
+    try {
+      const binId = await this.verifyApiKey(apiKey);
+      
+      if (!binId) {
+        return { success: false, error: 'Invalid API key' };
+      }
+
+      const binRef = doc(db, 'bins', binId);
+      await updateDoc(binRef, {
+        comp1Capacity: comp1Capacity,
+        comp2Capacity: comp2Capacity,
+        lastCapacityUpdate: serverTimestamp(),
+      });
+      
+      console.log(`Updated bin ${binId} capacity: Comp1=${comp1Capacity}%, Comp2=${comp2Capacity}%`);
+      return { success: true, binId };
+    } catch (error) {
+      console.error('Error updating bin capacity:', error);
+      return { success: false, error: 'Failed to update capacity' };
     }
   }
 

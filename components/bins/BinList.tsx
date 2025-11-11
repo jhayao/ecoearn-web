@@ -58,6 +58,27 @@ const BinList: React.FC<BinListProps> = ({ bins, onBinSelect, onDeleteBin }) => 
                 <div className="flex justify-between items-start mb-3">
                   <h4 className="font-medium text-gray-900 truncate">{bin.name}</h4>
                   <div className="flex items-center space-x-2">
+                    {/* Online/Offline Status */}
+                    {(() => {
+                      const now = Date.now();
+                      const lastHeartbeat = bin.lastHeartbeat?.seconds 
+                        ? bin.lastHeartbeat.seconds * 1000 
+                        : 0;
+                      const isOnline = (now - lastHeartbeat) < 60000;
+                      
+                      return (
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium flex items-center ${
+                          isOnline ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full mr-1 ${
+                            isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                          }`}></span>
+                          {isOnline ? 'Online' : 'Offline'}
+                        </span>
+                      );
+                    })()}
+                    
+                    {/* User Status */}
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusColor(bin.status)}`}>
                       {getStatusText(bin.status)}
                     </span>

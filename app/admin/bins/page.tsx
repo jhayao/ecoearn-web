@@ -173,6 +173,9 @@ const BinsPage: React.FC = () => {
           // Add bin to Firestore
           const binId = await adminService.addBin(binData);
 
+          // Get the created bin to retrieve the API key
+          const createdBin = await adminService.getBinById(binId);
+
           // Generate QR code
           const QRCode = await import('qrcode');
           const qrData = JSON.stringify({
@@ -198,7 +201,12 @@ const BinsPage: React.FC = () => {
             qrCodePhoto: qrCodeDataURL
           });
 
-          alert('Bin created successfully! QR code generated.');
+          // Show API key in alert
+          const apiKeyMessage = createdBin?.apiKey 
+            ? `\n\n🔑 IoT API KEY:\n${createdBin.apiKey}\n\n⚠️ IMPORTANT: Save this API key now!\nYou'll need it for your IoT device configuration.\nThis key won't be shown again.`
+            : '';
+
+          alert(`✅ Bin created successfully!${apiKeyMessage}\n\nQR code has been generated and can be downloaded from the bin details.`);
           handleBinAdded();
         } catch (error) {
           console.error('Error creating bin:', error);
@@ -442,71 +450,187 @@ const BinsPage: React.FC = () => {
                 <div className="space-y-6">
                   {/* Status Card */}
                   <div className="bg-gray-50 rounded-lg p-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between space-y-4 sm:space-y-0">
+                    <div className="flex flex-col space-y-4">
+                      {/* Online Status */}
                       <div>
-                        <p className="text-sm font-medium text-gray-600">Status</p>
+                        <p className="text-sm font-medium text-gray-600 mb-2">Device Status</p>
+                        {(() => {
+                          const now = Date.now();
+                          const lastHeartbeat = selectedBin.lastHeartbeat?.seconds 
+                            ? selectedBin.lastHeartbeat.seconds * 1000 
+                            : 0;
+                          const timeSinceHeartbeat = now - lastHeartbeat;
+                          
+                          // Check both onlineStatus field AND heartbeat timestamp
+                          // Consider online if either:
+                          // 1. onlineStatus explicitly set to 'online', OR
+                          // 2. heartbeat received within last 60 seconds
+                          const isOnlineByStatus = selectedBin.onlineStatus === 'online';
+                          const isOnlineByHeartbeat = lastHeartbeat > 0 && timeSinceHeartbeat < 60000;
+                          const isOnline = isOnlineByStatus || isOnlineByHeartbeat;
+                          
+                          return (
+                            <div className="flex items-center space-x-2">
+                              <span className={`flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                                isOnline 
+                                  ? 'bg-green-100 text-green-800' 
+                                  : 'bg-red-100 text-red-800'
+                              }`}>
+                                <span className={`w-2 h-2 rounded-full mr-2 ${
+                                  isOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500'
+                                }`}></span>
+                                {isOnline ? 'Online' : 'Offline'}
+                              </span>
+                              {selectedBin.lastHeartbeat && (
+                                <span className="text-xs text-gray-500">
+                                  {isOnlineByHeartbeat 
+                                    ? `Active ${Math.floor(timeSinceHeartbeat / 1000)}s ago`
+                                    : `Last seen ${Math.floor(timeSinceHeartbeat / 60000)}m ago`
+                                  }
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                      
+                      {/* User Connection Status */}
+                      <div>
+                        <p className="text-sm font-medium text-gray-600">User Status</p>
                         <span className={`inline-flex px-3 py-1 rounded-full text-sm font-medium ${
                           selectedBin.status === 'active' 
-                            ? 'bg-green-100 text-green-800' 
+                            ? 'bg-blue-100 text-blue-800' 
                             : 'bg-gray-100 text-gray-800'
                         }`}>
-                          {selectedBin.status === 'active' ? 'Active' : 'Inactive'}
+                          {selectedBin.status === 'active' ? 'User Connected' : 'No User'}
                         </span>
                       </div>
-                      <div className="sm:text-right">
-                        <p className="text-sm font-medium text-gray-600">Fill Level</p>
-                        {isEditing ? (
-                          <div className="space-y-2">
-                            <div className="flex items-center space-x-2">
-                              <input
-                                type="number"
-                                min="0"
-                                max="100"
-                                value={editFormData.level}
-                                onChange={(e) => setEditFormData({...editFormData, level: e.target.value})}
-                                className="w-16 px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500"
-                              />
-                              <span className="text-sm text-gray-600">%</span>
-                            </div>
-                            <div className="flex items-center space-x-2">
-                              <div className="w-16 bg-gray-200 rounded-full h-2">
+
+                      {/* IoT Capacity Monitoring */}
+                      {(selectedBin.comp1Capacity !== undefined || selectedBin.comp2Capacity !== undefined) ? (
+                        <div className="space-y-3">
+                          <p className="text-sm font-medium text-gray-600">IoT Capacity Monitoring</p>
+                          
+                          {/* Compartment 1 */}
+                          {selectedBin.comp1Capacity !== undefined && (
+                            <div className="bg-white rounded-lg p-3 border border-gray-200">
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-medium text-gray-700">Compartment 1</span>
+                                <span className={`text-sm font-bold ${
+                                  selectedBin.comp1Capacity >= 80 ? 'text-red-600' :
+                                  selectedBin.comp1Capacity >= 60 ? 'text-yellow-600' : 'text-green-600'
+                                }`}>
+                                  {selectedBin.comp1Capacity}%
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2">
                                 <div 
                                   className={`h-2 rounded-full transition-all duration-300 ${
-                                    parseInt(editFormData.level) >= 80 ? 'bg-red-500' :
-                                    parseInt(editFormData.level) >= 60 ? 'bg-yellow-500' : 'bg-green-500'
+                                    selectedBin.comp1Capacity >= 80 ? 'bg-red-500' :
+                                    selectedBin.comp1Capacity >= 60 ? 'bg-yellow-500' : 'bg-green-500'
                                   }`}
-                                  style={{ width: `${Math.min(100, Math.max(0, parseInt(editFormData.level) || 0))}%` }}
+                                  style={{ width: `${selectedBin.comp1Capacity}%` }}
                                 ></div>
                               </div>
-                              <span className={`text-xs font-medium ${
-                                parseInt(editFormData.level) >= 80 ? 'text-red-600' :
-                                parseInt(editFormData.level) >= 60 ? 'text-yellow-600' : 'text-green-600'
+                              <p className="text-xs text-gray-500 mt-1">
+                                {selectedBin.comp1Capacity >= 80 ? '🚨 Full - Needs emptying' :
+                                 selectedBin.comp1Capacity >= 60 ? '⚠️ Moderate - Monitor closely' : '✅ Available'}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Compartment 2 */}
+                          {selectedBin.comp2Capacity !== undefined && (
+                            <div className="bg-white rounded-lg p-3 border border-gray-200">
+                              <div className="flex justify-between items-center mb-2">
+                                <span className="text-sm font-medium text-gray-700">Compartment 2</span>
+                                <span className={`text-sm font-bold ${
+                                  selectedBin.comp2Capacity >= 80 ? 'text-red-600' :
+                                  selectedBin.comp2Capacity >= 60 ? 'text-yellow-600' : 'text-green-600'
+                                }`}>
+                                  {selectedBin.comp2Capacity}%
+                                </span>
+                              </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className={`h-2 rounded-full transition-all duration-300 ${
+                                    selectedBin.comp2Capacity >= 80 ? 'bg-red-500' :
+                                    selectedBin.comp2Capacity >= 60 ? 'bg-yellow-500' : 'bg-green-500'
+                                  }`}
+                                  style={{ width: `${selectedBin.comp2Capacity}%` }}
+                                ></div>
+                              </div>
+                              <p className="text-xs text-gray-500 mt-1">
+                                {selectedBin.comp2Capacity >= 80 ? '🚨 Full - Needs emptying' :
+                                 selectedBin.comp2Capacity >= 60 ? '⚠️ Moderate - Monitor closely' : '✅ Available'}
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Last Update */}
+                          {selectedBin.lastCapacityUpdate && (
+                            <p className="text-xs text-gray-500 text-center">
+                              Last updated: {new Date(selectedBin.lastCapacityUpdate.seconds * 1000).toLocaleString()}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        /* Legacy Fill Level */
+                        <div>
+                          <p className="text-sm font-medium text-gray-600">Fill Level</p>
+                          {isEditing ? (
+                            <div className="space-y-2">
+                              <div className="flex items-center space-x-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="100"
+                                  value={editFormData.level}
+                                  onChange={(e) => setEditFormData({...editFormData, level: e.target.value})}
+                                  className="w-16 px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500"
+                                />
+                                <span className="text-sm text-gray-600">%</span>
+                              </div>
+                              <div className="flex items-center space-x-2">
+                                <div className="w-16 bg-gray-200 rounded-full h-2">
+                                  <div 
+                                    className={`h-2 rounded-full transition-all duration-300 ${
+                                      parseInt(editFormData.level) >= 80 ? 'bg-red-500' :
+                                      parseInt(editFormData.level) >= 60 ? 'bg-yellow-500' : 'bg-green-500'
+                                    }`}
+                                    style={{ width: `${Math.min(100, Math.max(0, parseInt(editFormData.level) || 0))}%` }}
+                                  ></div>
+                                </div>
+                                <span className={`text-xs font-medium ${
+                                  parseInt(editFormData.level) >= 80 ? 'text-red-600' :
+                                  parseInt(editFormData.level) >= 60 ? 'text-yellow-600' : 'text-green-600'
+                                }`}>
+                                  {parseInt(editFormData.level) >= 80 ? 'Full' :
+                                   parseInt(editFormData.level) >= 60 ? 'Moderate' : 'Empty'}
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center space-x-2 mt-1">
+                              <div className="w-16 bg-gray-200 rounded-full h-2">
+                                <div 
+                                  className={`h-2 rounded-full ${
+                                    (selectedBin.level || 0) >= 80 ? 'bg-red-500' :
+                                    (selectedBin.level || 0) >= 60 ? 'bg-yellow-500' : 'bg-green-500'
+                                  }`}
+                                  style={{ width: `${selectedBin.level || 0}%` }}
+                                ></div>
+                              </div>
+                              <span className={`text-sm font-medium ${
+                                (selectedBin.level || 0) >= 80 ? 'text-red-600' :
+                                (selectedBin.level || 0) >= 60 ? 'text-yellow-600' : 'text-green-600'
                               }`}>
-                                {parseInt(editFormData.level) >= 80 ? 'Full' :
-                                 parseInt(editFormData.level) >= 60 ? 'Moderate' : 'Empty'}
+                                {selectedBin.level || 0}%
                               </span>
                             </div>
-                          </div>
-                        ) : (
-                          <div className="flex items-center space-x-2 mt-1">
-                            <div className="w-16 bg-gray-200 rounded-full h-2">
-                              <div 
-                                className={`h-2 rounded-full ${
-                                  (selectedBin.level || 0) >= 80 ? 'bg-red-500' :
-                                  (selectedBin.level || 0) >= 60 ? 'bg-yellow-500' : 'bg-green-500'
-                                }`}
-                                style={{ width: `${selectedBin.level || 0}%` }}
-                              ></div>
-                            </div>
-                            <span className={`text-sm font-medium ${
-                              (selectedBin.level || 0) >= 80 ? 'text-red-600' :
-                              (selectedBin.level || 0) >= 60 ? 'text-yellow-600' : 'text-green-600'
-                            }`}>
-                              {selectedBin.level || 0}%
-                            </span>
-                          </div>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -620,6 +744,28 @@ const BinsPage: React.FC = () => {
                   <div className="bg-gray-50 rounded-lg p-4">
                     <h4 className="text-sm font-semibold text-gray-900 mb-3">Additional Information</h4>
                     <div className="space-y-2">
+                      {selectedBin.apiKey && (
+                        <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                          <div className="flex items-start justify-between mb-2">
+                            <span className="text-xs font-semibold text-blue-900">🔑 IoT API Key</span>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText(selectedBin.apiKey!);
+                                alert('API key copied to clipboard!');
+                              }}
+                              className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                            >
+                              Copy
+                            </button>
+                          </div>
+                          <code className="text-xs text-blue-800 break-all font-mono block bg-white p-2 rounded border border-blue-200">
+                            {selectedBin.apiKey}
+                          </code>
+                          <p className="text-xs text-blue-600 mt-2">
+                            ⚠️ Use this key for IoT device configuration
+                          </p>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-sm text-gray-600">Created Date</span>
                         <span className="text-sm font-medium text-gray-900">
