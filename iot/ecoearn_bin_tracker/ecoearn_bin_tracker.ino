@@ -105,16 +105,24 @@
 const char* WIFI_SSID = "Xiaomi_53DE";
 const char* WIFI_PASSWORD = "hayao1014";
 
-// API Configuration
+// API Configuration - UPDATE THESE FOR YOUR NETWORK
 const char* API_KEY = "BIN_MHSEHCF4_MH8NQIUUXEQVFVP30VU2M";  // Replace with your bin's API key
 const char* BIN_ID = "BIN_MHSEHCF4_MH8NQIUUXEQVFVP30VU2M";    // Bin ID (same as API key for now)
-const char* LOCATION_URL = "http://192.168.31.196:3000/api/iot/update-location";  // Location updates
-const char* CAPACITY_URL = "http://192.168.31.196:3000/api/iot/update-capacity";  // Capacity updates
-const char* HEARTBEAT_URL = "http://192.168.31.196:3000/api/iot/heartbeat";      // Heartbeat updates
-const char* GET_COMMAND_URL = "http://192.168.31.196:3000/api/iot/get-command";  // Poll for commands
-const char* RECYCLE_URL = "http://192.168.31.196:3000/api/iot/recycle";          // Individual recycling transactions
-const char* DEACTIVATE_BIN_URL = "http://192.168.31.196:3000/api/bins/deactivate"; // Mobile app calls this to set deactivation command
-const char* SESSION_DATA_URL = "http://192.168.31.196:3000/api/bins/session-data"; // ESP32 sends session data here
+
+// SERVER IP: Update this to your computer's local IP address (run 'ipconfig' on Windows or 'ifconfig' on Linux/Mac)
+// Example: If your computer IP is 192.168.1.100, use "192.168.1.100"
+// DO NOT use localhost/127.0.0.1 - ESP32 cannot connect to that
+const char* SERVER_IP = "192.168.31.196";  // ← CHANGE THIS TO YOUR COMPUTER'S IP
+const int SERVER_PORT = 3000;
+
+// Construct URLs at runtime (can't concatenate const char* at compile time)
+String LOCATION_URL;
+String CAPACITY_URL;
+String HEARTBEAT_URL;
+String GET_COMMAND_URL;
+String RECYCLE_URL;
+String DEACTIVATE_BIN_URL;
+String SESSION_DATA_URL;
 
 // Update intervals (in milliseconds)
 const unsigned long GPS_UPDATE_INTERVAL = 300000;  // 5 minutes for GPS
@@ -349,6 +357,22 @@ void setup() {
   // Connect to WiFi
   connectToWiFi();
   
+  // Construct API URLs using the server IP
+  String baseUrl = "http://" + String(SERVER_IP) + ":" + String(SERVER_PORT);
+  LOCATION_URL = baseUrl + "/api/iot/update-location";
+  CAPACITY_URL = baseUrl + "/api/iot/update-capacity";
+  HEARTBEAT_URL = baseUrl + "/api/iot/heartbeat";
+  GET_COMMAND_URL = baseUrl + "/api/iot/get-command";
+  RECYCLE_URL = baseUrl + "/api/iot/recycle";
+  DEACTIVATE_BIN_URL = baseUrl + "/api/bins/deactivate";
+  SESSION_DATA_URL = baseUrl + "/api/bins/session-data";
+  
+  Serial.println("API URLs configured:");
+  Serial.println("├─ Server IP: " + String(SERVER_IP) + ":" + String(SERVER_PORT));
+  Serial.println("├─ Session Data: " + SESSION_DATA_URL);
+  Serial.println("└─ Get Command: " + GET_COMMAND_URL);
+  Serial.println();
+  
   // Test basic connectivity
   if (WiFi.status() == WL_CONNECTED) {
     Serial.println("\n╔════════════════════════════════════════╗");
@@ -465,11 +489,19 @@ void loop() {
   // Poll for commands from server
   // When bin is active: poll FASTER for disconnect commands (every 2 seconds)
   // When bin is inactive: poll normally (every 5 seconds)
+  // SKIP polling when actively monitoring for trash to avoid interference
   unsigned long pollInterval = binActivatedByQR ? 2000 : COMMAND_POLL_INTERVAL;  // 2s when active, 5s when inactive
   
-  if (currentTime - lastCommandPollTime >= pollInterval) {
+  if (currentTime - lastCommandPollTime >= pollInterval && !monitoringForTrash) {
     pollForCommands();
     lastCommandPollTime = currentTime;
+  } else if (monitoringForTrash && currentTime - lastCommandPollTime >= pollInterval) {
+    // Debug: Show when command polling is being skipped due to trash monitoring
+    static unsigned long lastSkipMessage = 0;
+    if (currentTime - lastSkipMessage >= 10000) {  // Show message every 10 seconds
+      Serial.println("⏸️  Command polling paused - focusing on trash detection");
+      lastSkipMessage = currentTime;
+    }
   }
   
   // Check for TEST/BYPASS commands from Serial Monitor

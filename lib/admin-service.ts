@@ -1067,17 +1067,25 @@ export class AdminService {
       const userDoc = await getDoc(userRef);
       
       if (!userDoc.exists()) {
-        throw new Error('User not found');
+        // Create user if they don't exist (for ESP32 sessions)
+        console.log(`User ${userId} not found, creating placeholder user for ESP32 session`);
+        await setDoc(userRef, {
+          email: userId, // Use userId as email for now
+          totalPoints: 0,
+          createdAt: serverTimestamp(),
+          lastPointsUpdate: serverTimestamp()
+        });
       }
       
-      const currentPoints = userDoc.data()?.total_points || 0;
+      const currentPoints = userDoc.exists() ? (userDoc.data()?.totalPoints || 0) : 0;
       await updateDoc(userRef, {
-        total_points: currentPoints + points,
+        totalPoints: currentPoints + points,
         lastPointsUpdate: serverTimestamp()
       });
       
       console.log(`Added ${points} points to user ${userId}. New balance: ${currentPoints + points}`);
     } catch (error) {
+      console.error('Error in addUserPoints:', error);
       throw new Error(`Failed to add points to user: ${error}`);
     }
   }
@@ -1120,13 +1128,12 @@ export class AdminService {
 
   async calculatePoints(materialType: string, metalType: string | null, weight: number, quantity: number | null): Promise<number> {
     try {
-      const pricingDoc = await getDoc(doc(db, 'pricing', 'current'));
+      const pricing = await this.getCurrentPricing();
       
-      if (!pricingDoc.exists()) {
-        throw new Error('Pricing information not found');
+      if (!pricing) {
+        console.error('Pricing information not available');
+        return 0;
       }
-      
-      const pricing = pricingDoc.data() as Pricing;
       
       if (materialType.toLowerCase() === 'plastic' || materialType.toLowerCase() === 'plastic bottle') {
         // plastic = items per point (e.g., 50 bottles = 1 point)

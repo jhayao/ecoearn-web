@@ -13,6 +13,9 @@ export async function POST(request: NextRequest) {
     const body = JSON.parse(rawBody);
     const { userId, sessionData } = body;
 
+    console.log('[Session Data API] Parsed userId:', userId, 'type:', typeof userId);
+    console.log('[Session Data API] Parsed sessionData:', sessionData);
+
     if (!userId) {
       return NextResponse.json({
         success: false,
