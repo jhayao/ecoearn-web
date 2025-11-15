@@ -20,16 +20,28 @@ const MaterialCard: React.FC<MaterialCardProps> = ({
   onSave
 }) => {
   const [isEditing, setIsEditing] = useState(false);
-  const [editValue, setEditValue] = useState(title);
+  const [editValue, setEditValue] = useState(title.replace(' pts', ''));
 
   const handleSave = () => {
-    onSave(editValue);
+    onSave(editValue); // Don't add ' pts' - admin service handles it
     setIsEditing(false);
   };
 
   const handleCancel = () => {
-    setEditValue(title);
+    setEditValue(title.replace(' pts', ''));
     setIsEditing(false);
+  };
+
+  // Determine the label and value display based on material type
+  const getLabel = () => {
+    if (additionalText === 'Plastic Bottle') return 'Bottles per Point';
+    if (additionalText === 'Tin Can') return 'Cans per Point';
+    return 'Items per Point';
+  };
+
+  const getDisplayValue = () => {
+    const numValue = parseFloat(title.replace(' pts', ''));
+    return numValue;
   };
 
   return (
@@ -65,7 +77,7 @@ const MaterialCard: React.FC<MaterialCardProps> = ({
       
       <div className="space-y-2 sm:space-y-3 flex-1">
         <div>
-          <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Points per kg</label>
+          <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">{getLabel()}</label>
           {isEditing ? (
             <input
               type="text"
@@ -75,14 +87,14 @@ const MaterialCard: React.FC<MaterialCardProps> = ({
               autoFocus
             />
           ) : (
-            <div className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-900">{title}</div>
+            <div className="text-lg sm:text-xl lg:text-2xl font-bold text-gray-900">{getDisplayValue()}</div>
           )}
         </div>
         
         <div>
           <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Conversion Rate</label>
           <div className="flex items-center space-x-1.5 sm:space-x-2">
-            <div className="text-xs sm:text-sm font-medium text-gray-700">{title.replace(' pts', '')} points = 1 PHP</div>
+            <div className="text-xs sm:text-sm font-medium text-gray-700">100 points = ₱1.00</div>
             <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-green-500 rounded-full flex-shrink-0"></div>
           </div>
         </div>

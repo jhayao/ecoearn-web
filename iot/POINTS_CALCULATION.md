@@ -2,7 +2,11 @@
 
 ## Overview
 
-The EcoEarn system awards points to users based on the **material type** and **weight** of items recycled. Points are calculated server-side and credited to the user's account.
+The EcoEarn system awards points to users based on the **material type** and **quantity** of items recycled. Points are calculated server-side and credited to the user's account.
+
+Users earn:
+- **1 point for every X plastic bottles** recycled (X = admin-configurable, default 50)
+- **1 point for every Y tin/aluminum cans** recycled (Y = admin-configurable, default 10)
 
 ---
 
@@ -10,60 +14,59 @@ The EcoEarn system awards points to users based on the **material type** and **w
 
 ### Basic Formula
 ```
-Points = (Weight in KG) × (Points per KG for Material Type)
+Points = (Quantity of Items) × (Points per Item)
 ```
 
 ### Material Pricing Table
 
-Based on your current system:
+Based on your current system (admin-configurable):
 
-| Material Type | Price per KG (PHP) | Points per KG | Points per 100g |
-|---------------|-------------------|---------------|-----------------|
-| **Plastic** | ₱25.00 | 100 points | 10 points |
-| **Tin/Aluminum** | ₱45.00 | 150 points | 15 points |
-| **Rejected** | ₱0.00 | 0 points | 0 points |
+| Material Type | Items per Point | Points per Item | Points per 100g |
+|---------------|-----------------|-----------------|-----------------|
+| **Plastic Bottle** | 50 bottles | 0.02 points | N/A (count-based) |
+| **Tin/Aluminum Can** | 10 cans | 0.1 points | N/A (count-based) |
+| **Rejected** | N/A | 0 points | 0 points |
 
 ### Conversion Rate
 ```
-1 Point = ₱0.25
-400 Points = ₱100.00
+1 Point = ₱0.01
+100 Points = ₱1.00
 ```
 
 ---
 
 ## 🔢 Calculation Examples
 
-### Example 1: Plastic Bottle (500g = 0.5kg)
+### Example 1: Plastic Bottle (1 bottle)
 ```
-Weight: 0.5 kg
-Material: Plastic
-Points per KG: 100
+Quantity: 1 bottle
+Material: Plastic Bottle
+Points per Bottle: 0.02
 
 Calculation:
-Points = 0.5 kg × 100 points/kg = 50 points
-Value = 50 × ₱0.25 = ₱12.50
+Points = 1 bottle × 0.02 points/bottle = 0.02 points
+Value = 0.02 × ₱0.01 = ₱0.0002
 ```
 
-### Example 2: Aluminum Can (30g = 0.03kg)
+### Example 2: Tin Can (1 can)
 ```
-Weight: 0.03 kg
-Material: Tin
-Points per KG: 150
+Quantity: 1 can
+Material: Tin Can
+Points per Can: 0.1
 
 Calculation:
-Points = 0.03 kg × 150 points/kg = 4.5 points
-Rounded = 5 points
-Value = 5 × ₱0.25 = ₱1.25
+Points = 1 can × 0.1 points/can = 0.1 points
+Value = 0.1 × ₱0.01 = ₱0.001
 ```
 
-### Example 3: Multiple Items (3 plastic bottles)
+### Example 3: Multiple Items (50 plastic bottles)
 ```
-Item 1: 0.5 kg × 100 = 50 points
-Item 2: 0.45 kg × 100 = 45 points
-Item 3: 0.6 kg × 100 = 60 points
+Item: 50 plastic bottles
+Points per Bottle: 0.02
 
-Total: 155 points
-Value: ₱38.75
+Calculation:
+Points = 50 bottles × 0.02 points/bottle = 1 point
+Value = 1 × ₱0.01 = ₱0.01
 ```
 
 ### Example 4: Rejected Item
@@ -641,24 +644,38 @@ showWeightDialog({
 ### Key Formulas
 
 ```
-Base Points = Weight (kg) × Points per KG
-Total Points = Base Points + Bonus Points
-Cash Value = Total Points × ₱0.25
+Points = Quantity × (1 / Items per Point)
+Cash Value = Total Points × ₱0.01
 
-Plastic: 100 points/kg
-Tin: 150 points/kg
-Rejected: 0 points/kg
+Plastic Bottle: 1/[Items per Point] points per bottle
+Tin Can: 1/[Items per Point] points per can
+Rejected: 0 points per item
+
+Where "Items per Point" is admin-configurable:
+- Plastic default: 50 bottles per point
+- Tin default: 10 cans per point
 ```
 
----
+--- 
 
-## 💡 Recommendations
+## ⚙️ Admin Configuration
 
-1. **Use Load Cell**: For accurate weight measurement
-2. **Implement Bonuses**: Increase user engagement
-3. **Real-time Updates**: Use Firestore listeners
-4. **Admin Panel**: Allow pricing adjustments
-5. **Analytics**: Track points awarded per material type
-6. **Point Redemption**: Allow users to redeem points for rewards
+### Material Pricing
 
-Would you like me to help implement the backend point calculation logic or add weight sensing with load cells?
+Admins can configure the point values through the dashboard:
+
+- **Plastic Bottles**: Set how many bottles equal 1 point (default: 50)
+- **Tin Cans**: Set how many cans equal 1 point (default: 10)
+- **Conversion Rate**: Points to PHP conversion (default: 100 points = ₱1.00)
+
+### Dynamic Calculation
+
+The system automatically calculates:
+```
+Points per Item = 1 / Items per Point
+```
+
+**Example**: If admin sets "50 bottles per point":
+- Points per bottle = 1/50 = 0.02 points
+- 50 bottles = 1 point
+- 100 bottles = 2 points

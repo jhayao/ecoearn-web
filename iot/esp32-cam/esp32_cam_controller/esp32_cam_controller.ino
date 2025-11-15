@@ -18,7 +18,13 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
+
+// const char* WIFI_SSID = "FTTx-807a60";
+// const char* WIFI_PASSWORD = "mark0523";
 // WiFi Configuration
+// const char* ssid = "FTTx-807a60";
+// const char* password = "mark0523";
+
 const char* ssid = "Xiaomi_53DE";
 const char* password = "hayao1014";
 
@@ -71,11 +77,19 @@ float lastConfidence = 0.0;
 String lastAction = "";
 
 void setup() {
+  pinMode(FLASH_GPIO, OUTPUT);
+  digitalWrite(FLASH_GPIO, LOW);
+  for(int i = 0; i < 3; i++) {
+      digitalWrite(FLASH_GPIO, HIGH);
+      delay(200);
+      digitalWrite(FLASH_GPIO, LOW);
+      delay(200);
+    }
+
   ESP32_SERIAL.begin(9600);
   delay(1000);
   
-  pinMode(FLASH_GPIO, OUTPUT);
-  digitalWrite(FLASH_GPIO, LOW);
+  
   
   initializeCamera();
   connectToWiFi();
@@ -135,6 +149,30 @@ void connectToWiFi() {
   while (WiFi.status() != WL_CONNECTED && attempts < 30) {
     delay(500);
     attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi connected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    
+    // Flash LED 3 times consecutively to indicate WiFi connection
+    for(int i = 0; i < 3; i++) {
+      digitalWrite(FLASH_GPIO, HIGH);
+      delay(200);
+      digitalWrite(FLASH_GPIO, LOW);
+      delay(200);
+    }
+    
+    // Send PING to ESP32 bin tracker after WiFi connection
+    ESP32_SERIAL.println("PING");
+    Serial.println("Sent PING to ESP32 bin tracker");
+    
+    // Send CAM IP address to ESP32 bin tracker
+    ESP32_SERIAL.println("CAM_IP:" + WiFi.localIP().toString());
+    Serial.println("Sent CAM IP to ESP32 bin tracker: " + WiFi.localIP().toString());
+  } else {
+    Serial.println("WiFi connection failed!");
   }
 }
 

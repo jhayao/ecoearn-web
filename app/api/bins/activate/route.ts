@@ -83,7 +83,8 @@ export async function POST(request: NextRequest) {
             currentUser: userId,
             activatedAt: scannedAt || new Date().toISOString(),
             sessionId: existingSessionId,
-            expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString()
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+            apiKey: bin.apiKey, // Include API key for deactivation
           }
         },
         { status: 200 }
@@ -146,7 +147,8 @@ export async function POST(request: NextRequest) {
         currentUser: userId,
         activatedAt: activatedAt,
         sessionId: sessionId,
-        expiresAt: expiresAt
+        expiresAt: expiresAt,
+        apiKey: bin.apiKey, // Include API key for deactivation
       }
     });
 

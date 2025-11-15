@@ -1,62 +1,54 @@
 /*
- * EcoEarn Smart Bin Controller
- * 
+ * EcoEarn Smart Bin Controller - NodeMCU ESP8266 Version
+ *
  * This Arduino sketch controls a smart trash bin with:
- * - GPS tracking (GY-GPS6MV2 module)
  * - User detection with Sharp IR sensor
  * - Capacity monitoring with 2 ultrasonic sensors
  * - Compartment control with 3 servo motors
- * 
+ *
  * Hardware Required:
- * - ESP32 38-pin Development Board
- * - GY-GPS6MV2 GPS Module
+ * - NodeMCU ESP8266 Development Board
  * - ESP32-CAM AI Thinker (for material identification)
  * - 1x Sharp 2Y0A21 IR Distance Sensor
  * - 2x HC-SR04 Ultrasonic Sensors
  * - 3x Servo Motors (MG90S or similar)
- * 
- * Pin Connections:
- * GPS Module:
- *   - GPS RX → ESP32 GPIO 17 (TX2)
- *   - GPS TX → ESP32 GPIO 16 (RX2)
- * 
- * ESP32-CAM Communication (Hardware Serial1):
- *   - ESP32 GPIO 33 (RX1) ← ESP32-CAM U0T/GPIO 1 (TX)
- *   - ESP32 GPIO 32 (TX1) → ESP32-CAM U0R/GPIO 3 (RX)
+ *
+ * Pin Connections (NodeMCU):
+ * ESP32-CAM Communication (SoftwareSerial):
+ *   - NodeMCU D1 (GPIO 5) → ESP32-CAM RX (GPIO 3)
+ *   - NodeMCU D2 (GPIO 4) → ESP32-CAM TX (GPIO 1)
  *   - Common GND
- *   Note: ESP32-CAM Serial Monitor will NOT work while connected
- *   GPIO 32/33 are SAFE - won't cause boot issues
- * 
+ *
  * Sensors:
- *   - Sharp IR Sensor OUT → ESP32 GPIO 34 (ADC) - Trash drop detection
- *   - Ultrasonic 1 TRIG → GPIO 25, ECHO → GPIO 26 (Plastic capacity)
- *   - Ultrasonic 2 TRIG → GPIO 27, ECHO → GPIO 14 (Tin capacity)
- * 
+ *   - Sharp IR Sensor OUT → NodeMCU A0 (Trash drop detection)
+ *   - Ultrasonic 1 TRIG → D7 (GPIO 13), ECHO → D8 (GPIO 15) (Plastic capacity)
+ *   - Ultrasonic 2 TRIG → D0 (GPIO 16), ECHO → D5 (GPIO 14) (Tin capacity)
+ *
  * Servos:
- *   - Bin Lid Servo → GPIO 12
- *   - Dropper Servo → GPIO 13
- *   - Rotator Servo → GPIO 15
- * 
- * Status LED → GPIO 2 (built-in)
- * 
+ *   - Bin Lid Servo → D3 (GPIO 0)
+ *   - Dropper Servo → D4 (GPIO 2)
+ *   - Rotator Servo → D6 (GPIO 12)
+ *
+ * Status LED → D4 (GPIO 2) (built-in)
+ *
  * Libraries Required:
- * - TinyGPS++ (for GPS parsing)
- * - WiFi (ESP32)
- * - HTTPClient (ESP32)
- * - ESP32Servo (for servo control)
+ * - ESP8266WiFi (for WiFi)
+ * - ESP8266HTTPClient (for HTTP requests)
+ * - Servo (for servo control)
  * - ArduinoJson (for JSON parsing)
- * 
+ * - SoftwareSerial (for ESP32-CAM communication)
+ *
  * ============================================
  * SERIAL MONITOR TEST COMMANDS
  * ============================================
  * Type these commands in Serial Monitor (115200 baud) to test:
- * 
+ *
  * Bin Control:
  *   activate   - Activate bin without QR scan (bypass for testing)
  *   deactivate - Deactivate bin and stop monitoring
  *   status     - Show current system status
  *   help       - Show all available commands
- * 
+ *
  * Servo Testing (works anytime):
  *   lid-open        - Open bin lid
  *   lid-close       - Close bin lid
@@ -66,19 +58,19 @@
  *   rotate-tin      - Rotate platform to tin compartment
  *   rotate-reject   - Rotate platform to reject compartment
  *   test-all-servos - Run complete servo test sequence
- * 
+ *
  * Material Testing (only when object is detected):
  *   plastic    - Simulate plastic bottle detection
- *   tin        - Simulate tin can detection  
+ *   tin        - Simulate tin can detection
  *   reject     - Simulate rejected item
- * 
+ *
  * Quick Servo Test Flow:
  *   1. Type "test-all-servos" to test all servos at once
  *   OR test individually:
  *   2. Type "lid-open" then "lid-close"
  *   3. Type "rotate-plastic", "rotate-tin", "rotate-reject"
  *   4. Type "drop-open" then "drop-close"
- * 
+ *
  * Quick Detection Test Flow:
  *   1. Type "activate" to bypass QR scan
  *   2. Place object near Sharp IR sensor
@@ -87,12 +79,11 @@
  * ============================================
  */
 
-#include <TinyGPS++.h>
-#include <HardwareSerial.h>
-#include <WiFi.h>
-#include <HTTPClient.h>
-#include <ESP32Servo.h>
-#include <ArduinoJson.h>  // For parsing server responses
+#include <SoftwareSerial.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include <Servo.h>
+#include <ArduinoJson.h>
 
 // ============================================
 // CONFIGURATION - EDIT THESE VALUES
@@ -112,12 +103,9 @@ const char* LOCATION_URL = "http://192.168.31.196:3000/api/iot/update-location";
 const char* CAPACITY_URL = "http://192.168.31.196:3000/api/iot/update-capacity";  // Capacity updates
 const char* HEARTBEAT_URL = "http://192.168.31.196:3000/api/iot/heartbeat";      // Heartbeat updates
 const char* GET_COMMAND_URL = "http://192.168.31.196:3000/api/iot/get-command";  // Poll for commands
-const char* RECYCLE_URL = "http://192.168.31.196:3000/api/iot/recycle";          // Individual recycling transactions
-const char* DEACTIVATE_BIN_URL = "http://192.168.31.196:3000/api/bins/deactivate"; // Mobile app calls this to set deactivation command
-const char* SESSION_DATA_URL = "http://192.168.31.196:3000/api/bins/session-data"; // ESP32 sends session data here
+const char* DEACTIVATE_BIN_URL = "http://192.168.31.196:3000/api/bins/deactivate"; // Deactivate bin with session data
 
 // Update intervals (in milliseconds)
-const unsigned long GPS_UPDATE_INTERVAL = 300000;  // 5 minutes for GPS
 const unsigned long CAPACITY_UPDATE_INTERVAL = 30000;  // 30 seconds for capacity
 const unsigned long HEARTBEAT_INTERVAL = 30000;        // 30 seconds for heartbeat
 const unsigned long COMMAND_POLL_INTERVAL = 5000;      // 5 seconds for command polling
@@ -125,37 +113,33 @@ const unsigned long USER_CHECK_INTERVAL = 500;         // 500ms for user presenc
 const unsigned long STANDBY_TIMEOUT = 30000;           // 30 seconds timeout to standby mode
 
 // ============================================
-// PIN CONFIGURATION (ESP32 38-pin)
+// PIN CONFIGURATION (NodeMCU ESP8266)
 // ============================================
 
-// GPS Serial pins (Hardware Serial 2)
-const int GPS_RX_PIN = 16;  // GPIO16 (RX2)
-const int GPS_TX_PIN = 17;  // GPIO17 (TX2)
-
-// ESP32-CAM Serial Communication pins (GPIO 32/33 - SAFE)
-const int CAM_RX_PIN = 33;  // GPIO33 - Receive from ESP32-CAM TX
-const int CAM_TX_PIN = 32;  // GPIO32 - Transmit to ESP32-CAM RX
+// ESP32-CAM Serial Communication pins (SoftwareSerial)
+const int CAM_RX_PIN = D2;  // GPIO4 - Receive from ESP32-CAM TX
+const int CAM_TX_PIN = D1;  // GPIO5 - Transmit to ESP32-CAM RX
 
 // User Presence Detection Sensor (Sharp 2Y0A21 IR Distance Sensor)
 // NOW USED FOR: Trash drop detection
-const int TRASH_DETECTION_PIN = 34;  // GPIO34 (ADC1_CH6 - input only)
+const int TRASH_DETECTION_PIN = A0;  // Analog pin A0
 
 // Compartment 1 Capacity Sensor (Plastic)
-const int COMP1_TRIG_PIN = 25;  // GPIO25
-const int COMP1_ECHO_PIN = 26;  // GPIO26
+const int COMP1_TRIG_PIN = D7;  // GPIO13
+const int COMP1_ECHO_PIN = D8;  // GPIO15
 
 // Compartment 2 Capacity Sensor (Tin)
-const int COMP2_TRIG_PIN = 27;  // GPIO27
-const int COMP2_ECHO_PIN = 14;  // GPIO14
+const int COMP2_TRIG_PIN = D0;  // GPIO16
+const int COMP2_ECHO_PIN = D5;  // GPIO14
 
 // Servo Motor Pins (PWM capable)
 // Rotating platform design: 1 bin lid + 1 dropper + 1 rotator
-const int BIN_LID_SERVO_PIN = 12;   // GPIO12 - MG90S: Opens/closes main bin lid
-const int DROPPER_SERVO_PIN = 13;   // GPIO13 - MG90S: Drops trash into compartment
-const int ROTATOR_SERVO_PIN = 15;   // GPIO15 - MG995: Rotates platform to compartment
+const int BIN_LID_SERVO_PIN = D3;   // GPIO0 - MG90S: Opens/closes main bin lid
+const int DROPPER_SERVO_PIN = D4;   // GPIO2 - MG90S: Drops trash into compartment
+const int ROTATOR_SERVO_PIN = D6;   // GPIO12 - MG995: Rotates platform to compartment
 
 // Status LED
-const int LED_PIN = 2;  // GPIO2 (Built-in LED on most ESP32 boards)
+const int LED_PIN = D4;  // GPIO2 (Built-in LED on NodeMCU)
 
 // ============================================
 // BIN CONFIGURATION
@@ -166,11 +150,12 @@ const float BIN_HEIGHT = 30.0;  // Total height of bin compartments
 
 // Sharp 2Y0A21 IR Distance Sensor configuration
 // NOW USED FOR: Detecting when trash is dropped into bin
-const int TRASH_DETECTION_THRESHOLD = 2600;  // ADC threshold for trash detection (ESP32 12-bit ADC: 0-4095)
-const int TRASH_DETECTION_MIN_ADC = 500;     // Minimum valid reading (80cm distance)
-const int TRASH_DETECTION_MAX_ADC = 3500;    // Maximum valid reading (10cm distance)
+// ESP8266 has 10-bit ADC (0-1023)
+const int TRASH_DETECTION_THRESHOLD = 400;  // ADC threshold for trash detection (ESP8266 10-bit ADC: 0-1023)
+const int TRASH_DETECTION_MIN_ADC = 120;     // Minimum valid reading (80cm distance)
+const int TRASH_DETECTION_MAX_ADC = 860;     // Maximum valid reading (10cm distance)
 // Detection range: ~10-80cm, optimal 20-50cm
-// Note: ESP32 has 12-bit ADC (0-4095) vs ESP8266 10-bit (0-1023)
+// Note: ESP8266 has 10-bit ADC (0-1023) vs ESP32 12-bit (0-4095)
 
 // Servo angles
 // Bin Lid Servo (MG90S)
@@ -178,19 +163,17 @@ const int LID_CLOSED = 0;           // Lid closed
 const int LID_OPEN = 90;            // Lid open
 
 // Dropper Servo (MG90S)
-const int DROPPER_HOLD = 90;         // Holding trash
-const int DROPPER_RELEASE = 0;     // Releasing trash
+const int DROPPER_HOLD = 90;     // Holding trash (starts at 90 degrees)
+const int DROPPER_RELEASE = 0;   // Releasing trash (moves to 0 degrees)
 
 // Rotator Servo (MG995)
-const int ROTATE_PLASTIC = 0;  //30       // Position for plastic compartment
-const int ROTATE_TIN = 180;          // Position for tin compartment
-const int ROTATE_REJECTED = 90;    // Position for rejected compartment
+const int ROTATE_PLASTIC = 0;       // Position for plastic compartment
+const int ROTATE_TIN = 90;          // Position for tin compartment
+const int ROTATE_REJECTED = 180;    // Position for rejected compartment
 
 // Serial Communication with ESP32-CAM
-// GPS uses Hardware Serial2 (GPIO 16/17)
-// ESP32-CAM uses Hardware Serial1 (GPIO 9/10)
-// Serial (Serial0) is reserved for USB debugging
-HardwareSerial ESP32_CAM_SERIAL(1);  // Hardware Serial1 for ESP32-CAM
+// ESP32-CAM uses SoftwareSerial (GPIO 4/5)
+SoftwareSerial ESP32_CAM_SERIAL(CAM_RX_PIN, CAM_TX_PIN);  // RX, TX
 #define ESP32_BAUD 9600
 
 // Compartment control commands from ESP32-CAM
@@ -203,24 +186,23 @@ HardwareSerial ESP32_CAM_SERIAL(1);  // Hardware Serial1 for ESP32-CAM
 #define CMD_ACTIVATE_BIN "ACTIVATE_BIN:"      // NEW: Format "ACTIVATE_BIN:userId:sessionId"
 #define CMD_DEACTIVATE_BIN "DEACTIVATE_BIN"   // NEW: Deactivate bin after use
 
-// Session counters for batch processing
-int sessionPlasticCount = 0;
-int sessionTinCount = 0;
-int sessionRejectedCount = 0;
-
-// Global state variables
-bool binActivatedByQR = false;
-String currentUserId = "";
-String currentSessionId = "";
+// System state
+bool binActivatedByQR = false;        // NEW: Only true when QR code is scanned
+String currentUserId = "";            // NEW: Store current user ID from QR scan
+String currentSessionId = "";         // NEW: Store session ID from QR activation
+bool userPresent = false;             // Not used anymore
 bool systemActive = false;
-bool monitoringForTrash = false;
-bool userPresent = false;
+bool monitoringForTrash = false;      // NEW: ESP8266 focuses on trash detection
+bool trashBeingProcessed = false;     // NEW: Prevent multiple detections of same item
+unsigned long trashMonitorStartTime = 0;
+unsigned long lastUserDetectionTime = 0;
+unsigned long lastUserCheckTime = 0;
+const unsigned long TRASH_MONITOR_TIMEOUT = 30000;     // 30 seconds to drop trash
 
-// GPS Configuration
-TinyGPSPlus gps;
-HardwareSerial gpsSerial(2);  // Use HardwareSerial2 for ESP32
-bool gpsEnabled = false;  // GPS will be enabled only if it gets a fix within 30 seconds at startup
-const unsigned long GPS_INIT_TIMEOUT = 1000;  // 30 seconds to get initial GPS fix
+// Session counters for batch point calculation
+int sessionPlasticCount = 0;          // Count of plastic bottles in current session
+int sessionTinCount = 0;              // Count of tin cans in current session
+int sessionRejectedCount = 0;         // Count of rejected items in current session
 
 // Servo objects (Rotating platform design)
 Servo binLidServo;    // MG90S - Main bin lid
@@ -228,15 +210,16 @@ Servo dropperServo;   // MG90S - Trash dropper
 Servo rotatorServo;   // MG995 - Platform rotator
 
 // Timing variables
-unsigned long lastGPSUpdateTime = 0;
 unsigned long lastCapacityUpdateTime = 0;
 unsigned long lastHeartbeatTime = 0;
 unsigned long lastCommandPollTime = 0;
+unsigned long trashDetectionTime = 0;  // NEW: Track when trash was first detected
+const unsigned long TRASH_PROCESSING_TIMEOUT = 60000;  // NEW: 60 seconds timeout for ESP32-CAM response
 
 // Compartment state (controlled by ESP32-CAM)
 bool binLidOpen = false;
 bool platformRotated = false;
-int currentPlatformPosition = ROTATE_REJECTED;  // Track rotator position
+int currentPlatformPosition = ROTATE_PLASTIC;  // Track rotator position
 unsigned long compartmentOpenTime = 0;
 const unsigned long COMPARTMENT_OPEN_DURATION = 5000;  // 5 seconds auto-close
 
@@ -247,13 +230,18 @@ float tinCapacity = 0.0;      // 0-100%
 void setup() {
   // Initialize serial communication
   Serial.begin(115200);
-  delay(2000);
+  delay(100);
   
   Serial.println("\n\n=================================");
   Serial.println("EcoEarn Smart Bin Controller");
-  Serial.println("Connected to ESP32-CAM");
+  Serial.println("NodeMCU ESP8266 Version");
+  Serial.println("GPS-FREE with SoftwareSerial");
   Serial.println("TRASH DROP DETECTION ENABLED");
   Serial.println("=================================\n");
+  
+  // Initialize SoftwareSerial for ESP32-CAM communication
+  ESP32_CAM_SERIAL.begin(ESP32_BAUD);
+  Serial.println("ESP32-CAM SoftwareSerial initialized on pins D1(D5)/D2(D4)");
   
   // Initialize LED
   pinMode(LED_PIN, OUTPUT);
@@ -276,75 +264,7 @@ void setup() {
   // Set initial servo positions
   binLidServo.write(LID_CLOSED);        // Lid closed
   dropperServo.write(DROPPER_HOLD);     // Holding position
-  rotatorServo.write(ROTATE_REJECTED);   // Default to plastic position
-  
-  // Initialize GPS on HardwareSerial2 (GPIO16=RX, GPIO17=TX)
-  gpsSerial.begin(9600, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
-  Serial.println("GPS Module initializing...");
-  Serial.println("Waiting for GPS fix (30 second timeout)...");
-  
-  // Try to get GPS fix for 30 seconds
-  unsigned long gpsStartTime = millis();
-  bool gpsFixObtained = false;
-  
-  while (millis() - gpsStartTime < GPS_INIT_TIMEOUT) {
-    while (gpsSerial.available() > 0) {
-      gps.encode(gpsSerial.read());
-    }
-    
-    if (gps.location.isValid()) {
-      gpsFixObtained = true;
-      gpsEnabled = true;
-      Serial.println("✓ GPS Fix Obtained!");
-      Serial.print("├─ Latitude: ");
-      Serial.println(gps.location.lat(), 6);
-      Serial.print("├─ Longitude: ");
-      Serial.println(gps.location.lng(), 6);
-      Serial.print("└─ Time to fix: ");
-      Serial.print((millis() - gpsStartTime) / 1000);
-      Serial.println(" seconds\n");
-      break;
-    }
-    
-    // Show progress every 10 seconds
-    if ((millis() - gpsStartTime) % 10000 < 100) {
-      Serial.print(".");
-    }
-    
-    delay(100);
-  }
-  
-  if (!gpsFixObtained) {
-    gpsEnabled = false;
-    Serial.println("\n⚠️  GPS Fix NOT obtained within 30 seconds");
-    Serial.println("GPS functionality DISABLED for this session");
-    Serial.println("Bin will operate without GPS tracking\n");
-  }
-  
-  // Initialize ESP32-CAM Serial Communication (Hardware Serial1 on GPIO32=TX, GPIO33=RX)
-  ESP32_CAM_SERIAL.begin(ESP32_BAUD, SERIAL_8N1, CAM_RX_PIN, CAM_TX_PIN);
-  Serial.println("ESP32-CAM Serial initialized on GPIO 32/33 (Serial1)");
-  Serial.println("├─ RX: GPIO 33 (from CAM U0T/GPIO 1)");
-  Serial.println("└─ TX: GPIO 32 (to CAM U0R/GPIO 3)");
-  Serial.println("⚠️  GPIO 9/10 NOT USED - causes boot loop!\n");
-  
-  // Wait for ESP32-CAM ping before connecting to WiFi
-  Serial.println("╔════════════════════════════════════════╗");
-  Serial.println("║   WAITING FOR ESP32-CAM PING         ║");
-  Serial.println("╚════════════════════════════════════════╝");
-  bool camConnected = waitForCAMPing();
-  
-  if (camConnected) {
-    Serial.println("✓ ESP32-CAM ping received and responded!");
-    Serial.println("LED will stay ON for 3 seconds...\n");
-    digitalWrite(LED_PIN, HIGH);
-    delay(3000);
-    digitalWrite(LED_PIN, LOW);
-  } else {
-    Serial.println("✗ No ping from ESP32-CAM (timeout)!");
-    Serial.println("LED will blink 5 times...\n");
-    blinkLED(5, 500);
-  }
+  rotatorServo.write(ROTATE_PLASTIC);   // Default to plastic position
   
   // Connect to WiFi
   connectToWiFi();
@@ -354,7 +274,7 @@ void setup() {
     Serial.println("\n╔════════════════════════════════════════╗");
     Serial.println("║   NETWORK DIAGNOSTICS                 ║");
     Serial.println("╚════════════════════════════════════════╝");
-    Serial.print("├─ ESP32 IP: ");
+    Serial.print("├─ ESP8266 IP: ");
     Serial.println(WiFi.localIP());
     Serial.print("├─ Gateway: ");
     Serial.println(WiFi.gatewayIP());
@@ -372,11 +292,7 @@ void setup() {
   }
   
   Serial.println("\nSystem ready!");
-  if (gpsEnabled) {
-    Serial.println("GPS: ENABLED - Location tracking active");
-  } else {
-    Serial.println("GPS: DISABLED - Operating without location tracking");
-  }
+  Serial.println("GPS: DISABLED - Operating without location tracking");
   Serial.println("Waiting for QR scan activation...");
   
   Serial.println("\n╔════════════════════════════════════════╗");
@@ -387,80 +303,8 @@ void setup() {
   Serial.println("  deactivate - End test session\n");
 }
 
-bool waitForCAMPing() {
-  Serial.println("Waiting for PING from ESP32-CAM...");
-  
-  // Clear any existing data
-  while (ESP32_CAM_SERIAL.available()) {
-    ESP32_CAM_SERIAL.read();
-  }
-  
-  // Wait for PING from ESP32-CAM (10 second timeout)
-  unsigned long startTime = millis();
-  String response = "";
-  bool pingReceived = false;
-  
-  while (millis() - startTime < 10000) {
-    if (ESP32_CAM_SERIAL.available()) {
-      char c = ESP32_CAM_SERIAL.read();
-      if (c == '\n') {
-        response.trim();
-        if (response == "PING") {
-          Serial.println("✓ Received PING from ESP32-CAM");
-          ESP32_CAM_SERIAL.println("PONG");
-          Serial.println("✓ Sent PONG response to ESP32-CAM");
-          pingReceived = true;
-          break;
-        }
-        response = "";
-      } else {
-        response += c;
-      }
-    }
-    delay(10);
-  }
-  
-  if (!pingReceived) {
-    Serial.println("✗ No PING received from ESP32-CAM (timeout)");
-    return false;
-  }
-  
-  // Now wait for CAM_IP message
-  Serial.println("Waiting for ESP32-CAM IP address...");
-  startTime = millis();
-  response = "";
-  
-  while (millis() - startTime < 5000) {
-    if (ESP32_CAM_SERIAL.available()) {
-      char c = ESP32_CAM_SERIAL.read();
-      if (c == '\n') {
-        response.trim();
-        if (response.startsWith("CAM_IP:")) {
-          String camIP = response.substring(7);  // Remove "CAM_IP:" prefix
-          Serial.println("✓ ESP32-CAM IP Address: " + camIP);
-          return true;
-        }
-        response = "";
-      } else {
-        response += c;
-      }
-    }
-    delay(10);
-  }
-  
-  Serial.println("✗ No CAM_IP received from ESP32-CAM (timeout)");
-  return false;
-}
-
 void loop() {
   unsigned long currentTime = millis();
-  
-  // Read GPS data continuously (only if GPS is enabled)
-  if (gpsEnabled) {
-    while (gpsSerial.available() > 0) {
-      gps.encode(gpsSerial.read());
-    }
-  }
   
   // Poll for commands from server
   // When bin is active: poll FASTER for disconnect commands (every 2 seconds)
@@ -475,7 +319,7 @@ void loop() {
   // Check for TEST/BYPASS commands from Serial Monitor
   checkSerialBypassCommands();
   
-  // Check for bin activation/deactivation commands from ESP32-CAM
+  // Check for bin activation/deactivation commands from ESP32-CAM (via SoftwareSerial)
   checkESP32Commands();
   
   // ONLY proceed with operations if bin is activated by QR scan
@@ -499,32 +343,22 @@ void loop() {
     // NO TIMEOUT - Bin stays active until trash is detected or user deactivates manually
   }
   
+  // Check for ESP32-CAM processing timeout
+  if (trashBeingProcessed && (currentTime - trashDetectionTime >= TRASH_PROCESSING_TIMEOUT)) {
+    Serial.println("\n⏰ ESP32-CAM TIMEOUT - No response within 60 seconds");
+    Serial.println("🔄 Resetting trash detection system...");
+    
+    // Reset processing state
+    trashBeingProcessed = false;
+    monitoringForTrash = true;
+    trashDetectionTime = 0;
+    
+    Serial.println("✅ Trash detection reset - ready for new item");
+    Serial.println("────────────────────────────────────────\n");
+  }
+  
   // Update system active state
   updateSystemState(currentTime);
-  
-  // Update GPS location periodically (only if GPS is enabled AND bin is NOT activated)
-  // Skip GPS updates when user is active to avoid interfering with trash detection
-  if (gpsEnabled && !binActivatedByQR && (currentTime - lastGPSUpdateTime >= GPS_UPDATE_INTERVAL || lastGPSUpdateTime == 0)) {
-    if (gps.location.isValid()) {
-      double latitude = gps.location.lat();
-      double longitude = gps.location.lng();
-      
-      Serial.println("----------------------------------------");
-      Serial.println("GPS Fix Acquired!");
-      Serial.print("Latitude: ");
-      Serial.println(latitude, 6);
-      Serial.print("Longitude: ");
-      Serial.println(longitude, 6);
-      Serial.print("Satellites: ");
-      Serial.println(gps.satellites.value());
-      Serial.println("----------------------------------------");
-      
-      // Update location to server
-      updateLocationToServer(latitude, longitude);
-      
-      lastGPSUpdateTime = currentTime;
-    }
-  }
   
   // Update capacity readings periodically
   if (currentTime - lastCapacityUpdateTime >= CAPACITY_UPDATE_INTERVAL) {
@@ -572,58 +406,6 @@ void connectToWiFi() {
   } else {
     Serial.println("\nFailed to connect to WiFi!");
   }
-}
-
-void updateLocationToServer(double latitude, double longitude) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected. Cannot update location.");
-    return;
-  }
-  
-  Serial.println("\nUpdating location to server...");
-  
-  WiFiClient client;
-  HTTPClient http;
-  
-  // Configure HTTP request
-  http.begin(client, LOCATION_URL);
-  http.addHeader("Content-Type", "application/json");
-  
-  // Create JSON payload
-  String payload = "{";
-  payload += "\"apiKey\":\"" + String(API_KEY) + "\",";
-  payload += "\"latitude\":" + String(latitude, 6) + ",";
-  payload += "\"longitude\":" + String(longitude, 6);
-  payload += "}";
-  
-  Serial.println("Location Payload: " + payload);
-  
-  // Send POST request
-  int httpResponseCode = http.POST(payload);
-  
-  if (httpResponseCode > 0) {
-    String response = http.getString();
-    Serial.print("HTTP Response code: ");
-    Serial.println(httpResponseCode);
-    Serial.print("Response: ");
-    Serial.println(response);
-    
-    if (httpResponseCode == 200) {
-      Serial.println("✓ Location updated successfully!");
-      
-      // Blink LED rapidly to indicate success
-      blinkLED(5, 50);
-    } else {
-      Serial.println("✗ Server returned an error!");
-    }
-  } else {
-    Serial.print("✗ Error sending location request: ");
-    Serial.println(httpResponseCode);
-    Serial.println(http.errorToString(httpResponseCode));
-  }
-  
-  http.end();
-  Serial.println();
 }
 
 void updateCapacityToServer() {
@@ -699,51 +481,6 @@ void sendHeartbeat() {
     Serial.println("💓 Heartbeat sent");
   }
   
-  http.end();
-}
-
-void sendSessionDataToServer() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("⚠️  WiFi not connected. Cannot send session data.");
-    return;
-  }
-
-  HTTPClient http;
-  http.begin(SESSION_DATA_URL);
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-API-Key", API_KEY);
-
-  // Create JSON payload with session data - use ArduinoJson for proper JSON construction
-  DynamicJsonDocument doc(1024);
-  doc["userId"] = currentUserId;
-  
-  JsonObject sessionData = doc.createNestedObject("sessionData");
-  sessionData["plasticCount"] = sessionPlasticCount;
-  sessionData["tinCount"] = sessionTinCount;
-  sessionData["rejectedCount"] = sessionRejectedCount;
-  sessionData["sessionId"] = currentSessionId;
-  
-  String payload;
-  serializeJson(doc, payload);
-
-  Serial.println("📤 Sending session data to server:");
-  Serial.println("├─ Plastic: " + String(sessionPlasticCount));
-  Serial.println("├─ Tin: " + String(sessionTinCount));
-  Serial.println("├─ Rejected: " + String(sessionRejectedCount));
-  Serial.println("└─ Payload: " + payload);
-
-  int httpResponseCode = http.POST(payload);
-
-  if (httpResponseCode == 200) {
-    String response = http.getString();
-    Serial.println("✅ Session data sent successfully!");
-    Serial.println("Response: " + response);
-  } else {
-    Serial.print("❌ Error sending session data: ");
-    Serial.println(httpResponseCode);
-    Serial.println(http.errorToString(httpResponseCode));
-  }
-
   http.end();
 }
 
@@ -847,33 +584,32 @@ void checkSerialBypassCommands() {
       deactivateBin();
       return;
     }
-    
-
-    
-
   }
 }
 
 void checkForTrashDrop() {
+  // If trash is already being processed, don't detect again
+  if (trashBeingProcessed) {
+    return;
+  }
+
   // Read analog value from Sharp 2Y0A21 IR sensor
   int adcValue = analogRead(TRASH_DETECTION_PIN);
-  
+
   // Debug: Show IR sensor reading
   static int debugCounter = 0;
   debugCounter++;
-  
+
   if (debugCounter >= 20) {
     Serial.print("📊 Trash Sensor ADC: ");
     Serial.print(adcValue);
     Serial.print(" (Threshold: ");
     Serial.print(TRASH_DETECTION_THRESHOLD);
     Serial.println(")");
-    
+
     debugCounter = 0;
   }
-  
 
-  
   // Check if trash is detected (object close to sensor)
   if (adcValue >= TRASH_DETECTION_THRESHOLD && adcValue <= TRASH_DETECTION_MAX_ADC) {
     Serial.println("\n╔════════════════════════════════════════╗");
@@ -881,26 +617,31 @@ void checkForTrashDrop() {
     Serial.println("╚════════════════════════════════════════╝");
     Serial.print("ADC Value: ");
     Serial.println(adcValue);
-    
+
+    // SET PROCESSING FLAG - Prevent multiple detections
+    trashBeingProcessed = true;
+    trashDetectionTime = millis();  // Record detection time for timeout
+
     // WAIT FOR USER TO REMOVE HAND
     Serial.println("\n⏳ Waiting 2 seconds for user to remove hand...");
     delay(2000);  // 2 second delay
     Serial.println("✓ Delay complete - proceeding with capture\n");
-    
+
     Serial.println("📸 TRIGGERING ESP32-CAM:");
     Serial.println("├─ Sending command: TRASH_DETECTED");
     Serial.println("├─ ESP32-CAM will capture 5 images");
     Serial.println("├─ Backend API: http://213.35.114.162:5001/identify/material");
     Serial.println("└─ Waiting for classification result...\n");
-    
-    // Stop monitoring
+
+    // Stop monitoring until this item is processed
     monitoringForTrash = false;
-    
+
     // Notify ESP32-CAM to capture and identify
     ESP32_CAM_SERIAL.println("TRASH_DETECTED");
-    
-    Serial.println("✅ Command sent to ESP32-CAM via Serial1");
+
+    Serial.println("✅ Command sent to ESP32-CAM via SoftwareSerial");
     Serial.println("⏳ ESP32-CAM should respond within 30 seconds");
+    Serial.println("🔒 Trash detection LOCKED until item is processed");
     Serial.println("────────────────────────────────────────\n");
   }
 }
@@ -917,6 +658,8 @@ void updateSystemState(unsigned long currentTime) {
       Serial.println("💤 System STANDBY - Bin locked");
       digitalWrite(LED_PIN, LOW);
       monitoringForTrash = false;
+      trashBeingProcessed = false;  // Reset processing flag
+      trashDetectionTime = 0;       // Reset detection time
     }
   }
 }
@@ -932,6 +675,8 @@ void checkESP32Commands() {
         command.startsWith("Sending") ||
         command.startsWith("HTTP") ||
         command.startsWith("Response") ||
+        command.startsWith("├─ Confidence") ||  // Filter confidence messages
+        command.startsWith("├─ Action") ||      // Filter action messages
         command.startsWith("Material") ||
         command.startsWith("Confidence") ||
         command.startsWith("Action") ||
@@ -959,6 +704,7 @@ void checkESP32Commands() {
         activateBin();
       } else {
         Serial.println("⚠️  Invalid ACTIVATE_BIN command format");
+        Serial.println("ACTIVATION_FAILED");
         ESP32_CAM_SERIAL.println("ACTIVATION_FAILED");
       }
       return;
@@ -973,22 +719,26 @@ void checkESP32Commands() {
     // ALL OTHER COMMANDS REQUIRE BIN TO BE ACTIVATED FIRST
     if (!binActivatedByQR) {
       Serial.println("⚠️  Bin not activated - scan QR code first!");
+      Serial.println("BIN_LOCKED");
       ESP32_CAM_SERIAL.println("BIN_LOCKED");
       return;
     }
     
-    // Process compartment commands - NOW COUNTING ITEMS INSTEAD OF SENDING REAL-TIME TRANSACTIONS
+    // Process compartment commands - NOW JUST COUNTING INSTEAD OF PROCESSING
     if (command == CMD_OPEN_PLASTIC) {
-      Serial.println("📦 Plastic bottle detected - counting...");
       sessionPlasticCount++;
+      Serial.println("📦 Plastic bottle detected - Count: " + String(sessionPlasticCount));
+      // Still need to physically sort the item
       sortPlasticItem();
     } else if (command == CMD_OPEN_TIN) {
-      Serial.println("🥫 Tin can detected - counting...");
       sessionTinCount++;
+      Serial.println("🥫 Tin can detected - Count: " + String(sessionTinCount));
+      // Still need to physically sort the item
       sortTinItem();
     } else if (command == CMD_OPEN_REJECTED) {
-      Serial.println("❌ Rejected item detected - counting...");
       sessionRejectedCount++;
+      Serial.println("❌ Rejected item detected - Count: " + String(sessionRejectedCount));
+      // Still need to physically sort the item
       sortRejectedItem();
     } else if (command == CMD_CLOSE_ALL) {
       closeAllCompartments();
@@ -997,6 +747,38 @@ void checkESP32Commands() {
     } else if (command == "PONG") {
       // Response to ping test
       Serial.println("📩 Received PONG from ESP32-CAM");
+    } else if (command.indexOf("├─ Material:") >= 0) {
+      // NEW: Parse ESP32-CAM material classification results
+      // Format: "├─ Material: plastic" or similar
+      int colonPos = command.indexOf("├─ Material:");
+      if (colonPos >= 0) {
+        String material = command.substring(colonPos + 12);  // Skip "├─ Material:"
+        material.trim();
+        material.toLowerCase();
+        
+        Serial.println("🎯 ESP32-CAM Material Classification: " + material);
+        
+        // Trigger appropriate sorting based on material
+        if (material == "plastic" || material == "bottle") {
+          sessionPlasticCount++;
+          Serial.println("📦 Plastic bottle detected - Count: " + String(sessionPlasticCount));
+          sortPlasticItem();
+        } else if (material == "tin" || material == "can" || material == "metal") {
+          sessionTinCount++;
+          Serial.println("🥫 Tin can detected - Count: " + String(sessionTinCount));
+          sortTinItem();
+        } else if (material == "rejected" || material == "other" || material == "unknown") {
+          sessionRejectedCount++;
+          Serial.println("❌ Rejected item detected - Count: " + String(sessionRejectedCount));
+          sortRejectedItem();
+        } else {
+          // Unknown material - treat as rejected
+          sessionRejectedCount++;
+          Serial.println("❓ Unknown material '" + material + "' - treating as rejected");
+          Serial.println("❌ Rejected item detected - Count: " + String(sessionRejectedCount));
+          sortRejectedItem();
+        }
+      }
     } else {
       Serial.println("Unknown command: " + command);
     }
@@ -1019,8 +801,8 @@ void sortPlasticItem() {
   delay(500);
   
   // Step 3: Return rotator to default position (ready for next item)
-  rotatorServo.write(ROTATE_REJECTED);
-  currentPlatformPosition = ROTATE_REJECTED;
+  rotatorServo.write(ROTATE_PLASTIC);
+  currentPlatformPosition = ROTATE_PLASTIC;
   delay(1000);
   
   Serial.println("✓ Plastic item sorted");
@@ -1031,7 +813,11 @@ void sortPlasticItem() {
   
   // Re-enable trash monitoring for next item
   monitoringForTrash = true;
+  trashBeingProcessed = false;  // Reset processing flag
+  trashDetectionTime = 0;       // Reset detection time
   
+  Serial.println("🔓 Trash detection UNLOCKED - ready for next item");
+  Serial.println("PLASTIC_SORTED");
   ESP32_CAM_SERIAL.println("PLASTIC_SORTED");
 }
 
@@ -1051,8 +837,8 @@ void sortTinItem() {
   delay(500);
   
   // Step 3: Return rotator to default position (ready for next item)
-  rotatorServo.write(ROTATE_REJECTED);
-  currentPlatformPosition = ROTATE_REJECTED;
+  rotatorServo.write(ROTATE_PLASTIC);
+  currentPlatformPosition = ROTATE_PLASTIC;
   delay(1500);  // Wait for rotation back to 0 degrees
   
   Serial.println("✓ Tin item sorted");
@@ -1063,7 +849,11 @@ void sortTinItem() {
   
   // Re-enable trash monitoring for next item
   monitoringForTrash = true;
+  trashBeingProcessed = false;  // Reset processing flag
+  trashDetectionTime = 0;       // Reset detection time
   
+  Serial.println("🔓 Trash detection UNLOCKED - ready for next item");
+  Serial.println("TIN_SORTED");
   ESP32_CAM_SERIAL.println("TIN_SORTED");
 }
 
@@ -1083,8 +873,8 @@ void sortRejectedItem() {
   delay(500);
   
   // Step 3: Return rotator to default position (ready for next item)
-  rotatorServo.write(ROTATE_REJECTED);
-  currentPlatformPosition = ROTATE_REJECTED;
+  rotatorServo.write(ROTATE_PLASTIC);
+  currentPlatformPosition = ROTATE_PLASTIC;
   delay(2000);  // Longer wait for 180° rotation back to 0
   
   Serial.println("✓ Rejected item sorted");
@@ -1095,7 +885,11 @@ void sortRejectedItem() {
   
   // Re-enable trash monitoring for next item
   monitoringForTrash = true;
+  trashBeingProcessed = false;  // Reset processing flag
+  trashDetectionTime = 0;       // Reset detection time
   
+  Serial.println("🔓 Trash detection UNLOCKED - ready for next item");
+  Serial.println("REJECTED_SORTED");
   ESP32_CAM_SERIAL.println("REJECTED_SORTED");
 }
 
@@ -1111,6 +905,7 @@ void closeAllCompartments() {
   Serial.println("All servos returned to default position");
   digitalWrite(LED_PIN, LOW);
   
+  Serial.println("ALL_CLOSED");
   ESP32_CAM_SERIAL.println("ALL_CLOSED");
 }
 
@@ -1146,7 +941,6 @@ void activateBin() {
   Serial.println("⚡ PERFORMANCE MODE ENABLED:");
   Serial.println("  ✓ Command polling: ACTIVE (2s interval for disconnect detection)");
   Serial.println("  ✓ Heartbeat: PAUSED (prevents interference)");
-  Serial.println("  ✓ GPS updates: PAUSED (saves bandwidth)");
   Serial.println("  ✓ Trash detection: ACTIVE & PRIORITIZED");
   Serial.println("========================================\n");
   
@@ -1163,6 +957,7 @@ void activateBin() {
   Serial.println("⏰ No timeout - bin will stay active until trash is detected");
   Serial.println("💡 Type 'deactivate' to manually stop monitoring\n");
   
+  Serial.println("BIN_ACTIVATED");
   ESP32_CAM_SERIAL.println("BIN_ACTIVATED");
 }
 
@@ -1171,26 +966,15 @@ void deactivateBin() {
   Serial.println("🔒 BIN DEACTIVATED");
   Serial.println("Session ended for user: " + currentUserId);
   Serial.println("");
-  Serial.println("📊 SESSION SUMMARY:");
-  Serial.println("├─ Plastic bottles: " + String(sessionPlasticCount));
-  Serial.println("├─ Tin cans: " + String(sessionTinCount));
-  Serial.println("└─ Rejected items: " + String(sessionRejectedCount));
-  Serial.println("");
-  
-  // SEND SESSION DATA TO SERVER BEFORE DEACTIVATING
-  if (sessionPlasticCount > 0 || sessionTinCount > 0 || sessionRejectedCount > 0) {
-    Serial.println("📤 Sending session data to server...");
-    sendSessionDataToServer();
-  } else {
-    Serial.println("ℹ️  No items recycled in this session");
-  }
-  
   Serial.println("⚡ NORMAL MODE RESUMED:");
   Serial.println("  ✓ Heartbeat: ACTIVE");
   Serial.println("  ✓ Command polling: ACTIVE");
-  Serial.println("  ✓ GPS updates: ACTIVE");
   Serial.println("  ✓ Trash detection: STANDBY");
   Serial.println("========================================");
+  
+  // SEND SESSION DATA TO SERVER BEFORE CLOSING
+  Serial.println("\n📊 Sending session totals to server...");
+  sendSessionDataToServer();
   
   // CLOSE LID FIRST - User disconnected, bin should close
   Serial.println("\n🚪 Closing bin lid...");
@@ -1201,8 +985,8 @@ void deactivateBin() {
   
   // Reset all servos to default positions
   dropperServo.write(DROPPER_HOLD);
-  rotatorServo.write(ROTATE_REJECTED);
-  currentPlatformPosition = ROTATE_REJECTED;
+  rotatorServo.write(ROTATE_PLASTIC);
+  currentPlatformPosition = ROTATE_PLASTIC;
   platformRotated = false;
   
   // Reset state
@@ -1212,6 +996,8 @@ void deactivateBin() {
   userPresent = false;
   systemActive = false;
   monitoringForTrash = false;
+  trashBeingProcessed = false;  // Reset processing flag
+  trashDetectionTime = 0;       // Reset detection time
   
   // RESET SESSION COUNTERS
   sessionPlasticCount = 0;
@@ -1222,6 +1008,7 @@ void deactivateBin() {
   
   Serial.println("✓ All systems reset to standby mode\n");
   
+  Serial.println("BIN_DEACTIVATED");
   ESP32_CAM_SERIAL.println("BIN_DEACTIVATED");
 }
 
@@ -1234,23 +1021,66 @@ void blinkLED(int times, int delayMs) {
   }
 }
 
+void sendSessionDataToServer() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("⚠️  WiFi not connected. Skipping session data send.");
+    return;
+  }
+  
+  WiFiClient client;
+  HTTPClient http;
+  
+  http.begin(client, DEACTIVATE_BIN_URL);
+  http.addHeader("Content-Type", "application/json");
+  
+  // Create JSON payload with session data
+  String payload = "{";
+  payload += "\"apiKey\":\"" + String(API_KEY) + "\",";
+  payload += "\"userId\":\"" + currentUserId + "\",";
+  payload += "\"userEmail\":\"" + currentUserId + "\",";
+  payload += "\"sessionData\":{";
+  payload += "\"plasticCount\":" + String(sessionPlasticCount) + ",";
+  payload += "\"tinCount\":" + String(sessionTinCount) + ",";
+  payload += "\"rejectedCount\":" + String(sessionRejectedCount);
+  payload += "}";
+  payload += "}";
+  
+  Serial.println("=== Sending Session Data to Server ===");
+  Serial.println("Plastic bottles: " + String(sessionPlasticCount));
+  Serial.println("Tin cans: " + String(sessionTinCount));
+  Serial.println("Rejected items: " + String(sessionRejectedCount));
+  
+  int httpResponseCode = http.POST(payload);
+  
+  if (httpResponseCode == 200) {
+    Serial.println("✓ Session data sent successfully");
+    String response = http.getString();
+    Serial.println("Response: " + response);
+  } else {
+    Serial.print("✗ Error sending session data: ");
+    Serial.println(httpResponseCode);
+    Serial.println(http.errorToString(httpResponseCode));
+  }
+  
+  http.end();
+  Serial.println();
+}
+
 void pollForCommands() {
   if (WiFi.status() != WL_CONNECTED) {
     return;
   }
 
+  WiFiClient client;
   HTTPClient http;
   
   // Set timeout to avoid hanging
   http.setTimeout(5000);  // 5 second timeout
   
-  // Begin connection with URL (no need for separate WiFiClient)
-  if (!http.begin(GET_COMMAND_URL)) {
+  // Begin connection with URL
+  if (!http.begin(client, GET_COMMAND_URL)) {
     return;
   }
-  
-  // Enable connection reuse
-  http.setReuse(false);  // Don't reuse connections to avoid stale connection issues
   
   http.addHeader("Content-Type", "application/json");
 
@@ -1294,23 +1124,6 @@ void pollForCommands() {
     Serial.println(httpResponseCode);
     Serial.print("Error description: ");
     Serial.println(http.errorToString(httpResponseCode));
-    
-    // Detailed error diagnostics
-    if (httpResponseCode == -1) {
-      Serial.println("\n🔍 Connection Error Diagnostics:");
-      Serial.println("├─ Possible causes:");
-      Serial.println("│  1. Server not running (check if Next.js dev server is active)");
-      Serial.println("│  2. Wrong IP address (verify server IP: 192.168.31.196)");
-      Serial.println("│  3. Firewall blocking connection");
-      Serial.println("│  4. Server not on same network as ESP32");
-      Serial.println("└─ Action: Verify server is running and reachable");
-      
-      // Try to ping the server (basic connectivity test)
-      Serial.println("\n🔧 Troubleshooting:");
-      Serial.print("├─ Can ESP32 reach server? Run this on PC: ping ");
-      Serial.println(WiFi.localIP());
-      Serial.println("└─ Is server running? Check: http://192.168.31.196:3000/api/iot/get-command");
-    }
   }
 
   http.end();
@@ -1348,17 +1161,4 @@ void processServerCommand(String command) {
   else {
     Serial.println("⚠️  Unknown server command: " + command);
   }
-}
-
-String getISOTimestamp() {
-  // If you have NTP sync, use that. Otherwise use millis-based approximation
-  unsigned long epoch = millis() / 1000;  // Rough approximation
-  time_t now = epoch;
-  struct tm timeinfo;
-  gmtime_r(&now, &timeinfo);
-  
-  char buffer[25];
-  strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
-  
-  return String(buffer);
 }

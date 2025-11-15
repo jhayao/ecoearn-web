@@ -391,12 +391,11 @@ Content-Type: application/json
 ```json
 {
   "success": true,
-  "message": "Bin deactivated successfully",
+  "message": "Bin deactivation initiated. ESP32 will process session data and award points.",
   "data": {
     "binId": "bin_001",
-    "status": "inactive",
-    "sessionDuration": 180,
-    "deactivatedAt": "2025-11-10T08:33:00Z"
+    "status": "deactivation_pending",
+    "commandSet": true
   }
 }
 ```
@@ -409,6 +408,48 @@ Content-Type: application/json
   "code": "UNAUTHORIZED_DEACTIVATION"
 }
 ```
+
+**Note:** This endpoint sets a command for the ESP32 to deactivate and send session data. The ESP32 will automatically process the session and award points to the user.
+
+---
+
+### 2.6 ESP32 Session Data (Internal)
+**Endpoint:** `POST /bins/session-data`
+
+**Headers:**
+```
+X-API-Key: {esp32_api_key}
+Content-Type: application/json
+```
+
+**Request Payload:**
+```json
+{
+  "userId": "abc123xyz789",
+  "sessionData": {
+    "plasticCount": 2,
+    "tinCount": 1,
+    "rejectedCount": 0,
+    "sessionId": "session_abc123"
+  }
+}
+```
+
+**Success Response (200):**
+```json
+{
+  "success": true,
+  "message": "ESP32 session data processed successfully",
+  "data": {
+    "pointsAwarded": 3,
+    "sessionProcessed": true,
+    "plasticProcessed": 2,
+    "tinProcessed": 1
+  }
+}
+```
+
+**Note:** This endpoint is called by ESP32 devices after bin deactivation to submit recycling session data and award points. Mobile apps should not call this endpoint directly.
 
 ---
 

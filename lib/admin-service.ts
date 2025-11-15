@@ -73,6 +73,10 @@ export interface ActivityLog {
   time: string;
   action: string;
   description: string;
+  // Bin activity fields (optional)
+  binId?: string;
+  binName?: string;
+  userId?: string;
 }
 
 export interface Transaction {
@@ -90,8 +94,8 @@ export interface AdminTransaction {
 }
 
 export interface Pricing {
-  plastic: number;
-  glass: number;
+  plastic: number; // items per point (e.g., 50 bottles = 1 point)
+  glass: number;   // items per point (e.g., 10 cans = 1 point)
   metal?: Record<string, number>;
   conversionRate?: number;
   updatedAt: Timestamp;
@@ -212,11 +216,24 @@ export class AdminService {
   // Activate bin when QR code is scanned
   async activateBin(binId: string, userId: string): Promise<void> {
     try {
+      // Get bin info for logging
+      const binDoc = await getDoc(doc(db, 'bins', binId));
+      const binData = binDoc.data() as Bin;
+      const binName = binData?.name || `Bin ${binId}`;
+
+      // Get user info for logging
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      const userData = userDoc.data();
+      const userEmail = userData?.email || userId;
+
       const binRef = doc(db, 'bins', binId);
       await updateDoc(binRef, {
         status: 'active',
         currentUser: userId,
       });
+
+      // Log bin activation activity
+      await this.logBinActivity('Bin Activated', binId, binName, userId, userEmail);
     } catch (error) {
       throw new Error(`Failed to activate bin: ${error}`);
     }
@@ -247,6 +264,13 @@ export class AdminService {
       if (binData.currentUser !== userId) {
         throw new Error('User is not authorized to deactivate this bin');
       }
+
+      const binName = binData?.name || `Bin ${binId}`;
+
+      // Get user info for logging
+      const userDoc = await getDoc(doc(db, 'users', userId));
+      const userData = userDoc.data();
+      const userEmail = userData?.email || userId;
       
       const binRef = doc(db, 'bins', binId);
       await updateDoc(binRef, {
@@ -256,6 +280,9 @@ export class AdminService {
         pendingCommand: 'DEACTIVATE_BIN',
         pendingCommandTimestamp: serverTimestamp()
       });
+
+      // Log bin deactivation activity
+      await this.logBinActivity('Bin Deactivated', binId, binName, userId, userEmail);
       
       console.log(`[Deactivate] Set DEACTIVATE_BIN command for bin ${binId}`);
     } catch (error) {
@@ -263,18 +290,24 @@ export class AdminService {
     }
   }
 
-  // Get a specific bin by ID
-  async getBinById(binId: string): Promise<Bin | null> {
+  // Get a specific bin by API key
+  async getBinByApiKey(apiKey: string): Promise<Bin | null> {
     try {
-      const binDoc = await getDoc(doc(db, 'bins', binId));
-      if (!binDoc.exists()) return null;
+      const snapshot = await getDocs(
+        query(collection(db, 'bins'), where('apiKey', '==', apiKey))
+      );
       
+      if (snapshot.empty) {
+        return null;
+      }
+      
+      const doc = snapshot.docs[0];
       return {
-        id: binDoc.id,
-        ...binDoc.data()
+        id: doc.id,
+        ...doc.data()
       } as Bin;
     } catch (error) {
-      console.error('Error getting bin by ID:', error);
+      console.error('Error getting bin by API key:', error);
       return null;
     }
   }
@@ -387,6 +420,23 @@ export class AdminService {
     } catch (error) {
       console.error('Error fetching bins:', error);
       return [];
+    }
+  }
+
+  // Get a single bin by ID
+  async getBinById(binId: string): Promise<Bin | null> {
+    try {
+      const docSnap = await getDoc(doc(db, 'bins', binId));
+      if (docSnap.exists()) {
+        return {
+          id: docSnap.id,
+          ...docSnap.data()
+        } as Bin;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error fetching bin by ID:', error);
+      return null;
     }
   }
 
@@ -706,22 +756,37 @@ export class AdminService {
       const docSnap = await getDoc(doc(db, 'pricing', 'current'));
       if (docSnap.exists()) {
         const data = docSnap.data() as Pricing;
-        // If conversionRate doesn't exist, set a default value
-        if (data.conversionRate === undefined) {
-          data.conversionRate = 10; // Default conversion rate
-          // Update the document with the default conversion rate
+        // If conversionRate doesn't exist or is old default, update it
+        let needsUpdate = false;
+        if (data.conversionRate === undefined || data.conversionRate === 10) {
+          data.conversionRate = 100; // Update to new conversion rate: 100 points = 1 PHP
+          needsUpdate = true;
+        }
+        // Update old default values to new format
+        if (data.plastic === 0.02) {
+          data.plastic = 50; // Convert from points per bottle to bottles per point
+          needsUpdate = true;
+        }
+        if (data.glass === 0.1) {
+          data.glass = 10; // Convert from points per can to cans per point
+          needsUpdate = true;
+        }
+        
+        // Update the document if any values were changed
+        if (needsUpdate) {
           await updateDoc(doc(db, 'pricing', 'current'), {
-            conversionRate: 10,
+            ...data,
             updatedAt: serverTimestamp(),
           });
         }
+        
         return data;
       } else {
         // Create initial pricing document if it doesn't exist
         const initialPricing = {
-          plastic: 1,
-          glass: 10,
-          conversionRate: 10,
+          plastic: 50,  // 50 bottles per point
+          glass: 10,    // 10 cans per point
+          conversionRate: 100,  // 100 points = 1 PHP
           updatedAt: serverTimestamp(),
         };
         await setDoc(doc(db, 'pricing', 'current'), initialPricing);
@@ -744,6 +809,27 @@ export class AdminService {
     } catch (error) {
       console.error('Error fetching activity logs:', error);
       return [];
+    }
+  }
+
+  // Log bin activity (activation/deactivation)
+  async logBinActivity(action: string, binId: string, binName: string, userId?: string, userEmail?: string): Promise<void> {
+    try {
+      await addDoc(collection(db, 'userActivities'), {
+        email: userEmail || 'System',
+        ipAddress: 'N/A',
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString(),
+        action: action,
+        description: `${action} - ${binName}`,
+        binId: binId,
+        binName: binName,
+        userId: userId || null,
+      });
+      
+      console.log(`Logged bin activity: ${action} for bin ${binName}`);
+    } catch (error) {
+      console.error('Error logging bin activity:', error);
     }
   }
 
@@ -974,9 +1060,62 @@ export class AdminService {
     }
   }
 
-  // Utility functions
-  encodeImage(imageBytes: Uint8Array): string {
-    return Buffer.from(imageBytes).toString('base64');
+  // Add points to user account
+  async addUserPoints(userId: string, points: number): Promise<void> {
+    try {
+      const userRef = doc(db, 'users', userId);
+      const userDoc = await getDoc(userRef);
+      
+      if (!userDoc.exists()) {
+        throw new Error('User not found');
+      }
+      
+      const currentPoints = userDoc.data()?.total_points || 0;
+      await updateDoc(userRef, {
+        total_points: currentPoints + points,
+        lastPointsUpdate: serverTimestamp()
+      });
+      
+      console.log(`Added ${points} points to user ${userId}. New balance: ${currentPoints + points}`);
+    } catch (error) {
+      throw new Error(`Failed to add points to user: ${error}`);
+    }
+  }
+
+  // Log recycling activity
+  async logRecyclingActivity(activity: {
+    userId: string;
+    userEmail: string;
+    materialType: string;
+    quantity: number;
+    weight: number;
+    pointsEarned: number;
+    binId: string;
+    binName: string;
+    sessionData?: any;
+  }): Promise<void> {
+    try {
+      await addDoc(collection(db, 'recycling_requests'), {
+        userId: activity.userId,
+        userEmail: activity.userEmail,
+        userName: activity.userEmail, // Using email as name for now
+        materialType: activity.materialType,
+        quantity: activity.quantity,
+        weight: activity.weight,
+        pointsEarned: activity.pointsEarned,
+        binId: activity.binId,
+        binName: activity.binName,
+        status: 'approved', // Auto-approve session-based recycling
+        timestamp: serverTimestamp(),
+        sessionData: activity.sessionData || null,
+        date: new Date().toLocaleDateString(),
+        time: new Date().toLocaleTimeString()
+      });
+      
+      console.log(`Logged recycling activity for user ${activity.userId}: ${activity.pointsEarned} points`);
+    } catch (error) {
+      throw new Error(`Failed to log recycling activity: ${error}`);
+    }
   }
 
   async calculatePoints(materialType: string, metalType: string | null, weight: number, quantity: number | null): Promise<number> {
@@ -989,9 +1128,16 @@ export class AdminService {
       
       const pricing = pricingDoc.data() as Pricing;
       
-      if (materialType.toLowerCase() === 'glass') {
-        const pricePerItem = pricing.glass;
-        return Math.round(pricePerItem * (quantity || 0));
+      if (materialType.toLowerCase() === 'plastic' || materialType.toLowerCase() === 'plastic bottle') {
+        // plastic = items per point (e.g., 50 bottles = 1 point)
+        // So points per item = 1 / items_per_point
+        const pointsPerBottle = 1 / pricing.plastic;
+        return Math.round((quantity || 1) * pointsPerBottle * 100) / 100; // Round to 2 decimal places
+      } else if (materialType.toLowerCase() === 'glass' || materialType.toLowerCase() === 'tin can') {
+        // glass = items per point (e.g., 10 cans = 1 point)
+        // So points per item = 1 / items_per_point
+        const pointsPerCan = 1 / pricing.glass;
+        return Math.round((quantity || 0) * pointsPerCan * 100) / 100; // Round to 2 decimal places
       } else if (materialType.toLowerCase() === 'metal') {
         const metalPrices = pricing.metal || {};
         const pricePerKg = metalPrices[metalType || 'Other'] || 0;

@@ -71,9 +71,10 @@ const ActivityLogsPage: React.FC = () => {
 
   useEffect(() => {
     let filtered = logs.filter(log =>
-      log.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.action.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      log.description.toLowerCase().includes(searchQuery.toLowerCase())
+      (log.email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+      (log.action?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+      (log.description?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+      (log.binName?.toLowerCase() || '').includes(searchQuery.toLowerCase())
     );
 
     // Sort logs
@@ -161,7 +162,7 @@ const ActivityLogsPage: React.FC = () => {
           <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-4 h-4" />
           <input
             type="text"
-            placeholder="Search by email, action, or description..."
+            placeholder="Search by email, bin name, action, or description..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
@@ -187,15 +188,16 @@ const ActivityLogsPage: React.FC = () => {
           <div className="min-w-[800px]">
             {/* Table Header */}
             <div className="px-6 py-4 bg-gray-50 border-b border-gray-200">
-              <div className="grid grid-cols-5 gap-4 text-sm font-medium text-gray-700">
-                <div className="min-w-[150px]">Email</div>
+              <div className="grid grid-cols-6 gap-4 text-sm font-medium text-gray-700">
+                <div className="min-w-[120px]">User/Bin</div>
                 <div className="flex items-center gap-1 min-w-[120px]">
                   IP Address
                   <span className="text-xs text-gray-500 font-normal">(IPv4/IPv6)</span>
                 </div>
                 <div className="min-w-[120px]">Date & Time</div>
                 <div className="min-w-[100px]">Action</div>
-                <div className="min-w-[200px]">Description</div>
+                <div className="min-w-[150px]">Details</div>
+                <div className="min-w-[100px]">Type</div>
               </div>
             </div>
 
@@ -203,9 +205,9 @@ const ActivityLogsPage: React.FC = () => {
             <div className="divide-y divide-gray-200">
               {getCurrentPageLogs().map((log) => (
                 <div key={log.id} className="px-6 py-4 hover:bg-gray-50 transition-colors">
-                  <div className="grid grid-cols-5 gap-4 text-sm text-gray-900">
-                    <div className="font-medium truncate min-w-[150px]" title={log.email || 'N/A'}>
-                      {log.email || 'N/A'}
+                  <div className="grid grid-cols-6 gap-4 text-sm text-gray-900">
+                    <div className="font-medium truncate min-w-[120px]" title={log.binName || log.email || 'N/A'}>
+                      {log.binName || log.email || 'N/A'}
                     </div>
                     <div 
                       className="font-mono text-xs truncate cursor-help min-w-[120px]" 
@@ -222,13 +224,22 @@ const ActivityLogsPage: React.FC = () => {
                         log.action === 'Online' ? 'bg-green-100 text-green-800' :
                         log.action === 'Login' ? 'bg-blue-100 text-blue-800' :
                         log.action === 'Logout' ? 'bg-red-100 text-red-800' :
+                        log.action === 'Bin Activated' ? 'bg-emerald-100 text-emerald-800' :
+                        log.action === 'Bin Deactivated' ? 'bg-orange-100 text-orange-800' :
                         'bg-gray-100 text-gray-800'
                       }`}>
                         {log.action || 'N/A'}
                       </span>
                     </div>
-                    <div className="truncate min-w-[200px]" title={log.description || 'N/A'}>
+                    <div className="truncate min-w-[150px]" title={log.description || 'N/A'}>
                       {log.description || 'N/A'}
+                    </div>
+                    <div className="min-w-[100px]">
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        log.binId ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {log.binId ? 'Bin' : 'User'}
+                      </span>
                     </div>
                   </div>
                 </div>

@@ -1,98 +1,83 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AdminService } from '@/lib/admin-service';
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json();
-    const { binId, userId, userEmail } = body;
+  console.log('[Deactivate API] Mobile app deactivation request received');
 
-    // Validate required fields
+  try {
+    // Parse the request body
+    const body = await request.json();
+    const { binId, userId, sessionId } = body;
+
     if (!binId || !userId) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Missing required fields: binId, userId' 
-        },
-        { status: 400 }
-      );
+      return NextResponse.json({
+        success: false,
+        error: 'binId and userId are required'
+      }, { status: 400 });
     }
+
+    console.log('[Deactivate API] Processing deactivation request:', { binId, userId, sessionId });
 
     const adminService = new AdminService();
 
-    // Get bin details
-    const bin = await adminService.getBinById(binId);
-    
-    if (!bin) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'Bin not found' 
-        },
-        { status: 404 }
-      );
+    // Verify the user is authorized to deactivate this bin
+    const canDeactivate = await adminService.canUserRecycleInBin(binId, userId);
+    if (!canDeactivate) {
+      return NextResponse.json({
+        success: false,
+        error: 'User is not authorized to deactivate this bin',
+        code: 'UNAUTHORIZED_DEACTIVATION'
+      }, { status: 403 });
     }
 
-    // Check if the user is authorized to deactivate this bin
-    if (bin.currentUser !== userId) {
-      return NextResponse.json(
-        { 
-          success: false, 
-          error: 'You are not authorized to deactivate this bin',
-          currentUser: bin.currentUser
-        },
-        { status: 403 } // Forbidden
-      );
-    }
-
-    // Deactivate bin
-    console.log(`[Deactivate API] User ${userId} disconnecting from bin ${binId}`);
-    await adminService.deactivateBinForUser(binId, userId);
-    console.log(`[Deactivate API] DEACTIVATE_BIN command queued for ESP32`);
-
-    // Log the activity
-    const { addDoc, collection, serverTimestamp } = await import('firebase/firestore');
-    const { db } = await import('@/lib/firebase');
-    
-    await addDoc(collection(db, 'userActivities'), {
-      userId: userId,
-      email: userEmail || userId,
-      action: 'Bin Deactivate',
-      description: `Deactivated bin: ${bin.name}`,
-      binId: binId,
-      binName: bin.name,
-      date: new Date().toLocaleDateString(),
-      time: new Date().toLocaleTimeString(),
-      timestamp: serverTimestamp()
+    // Set deactivation command for ESP32 to pick up
+    const binRef = doc(db, 'bins', binId);
+    await updateDoc(binRef, {
+      pendingCommand: 'DEACTIVATE_BIN',
+      pendingCommandTimestamp: serverTimestamp()
     });
+
+    console.log(`[Deactivate API] Set DEACTIVATE_BIN command for bin ${binId}`);
 
     return NextResponse.json({
       success: true,
-      message: 'Bin deactivated successfully',
-      bin: {
-        id: bin.id,
-        name: bin.name,
-        status: 'inactive'
+      message: 'Bin deactivation initiated. ESP32 will process session data and award points.',
+      data: {
+        binId,
+        status: 'deactivation_pending',
+        commandSet: true
       }
     });
 
   } catch (error) {
-    console.error('Error deactivating bin:', error);
-    return NextResponse.json(
-      { 
-        success: false, 
-        error: 'Internal server error' 
-      },
-      { status: 500 }
-    );
+    console.error('[Deactivate API] Error processing deactivation request:', error);
+    return NextResponse.json({
+      success: false,
+      error: 'Failed to initiate bin deactivation',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    }, { status: 500 });
   }
 }
 
 // Handle GET requests
 export async function GET() {
   return NextResponse.json({
-    message: 'Bin Deactivate Endpoint',
+    message: 'Bin Deactivate Endpoint - Mobile App',
     method: 'POST',
+    description: 'Mobile app calls this endpoint to request bin deactivation',
     requiredFields: ['binId', 'userId'],
-    optionalFields: ['userEmail']
+    optionalFields: ['sessionId'],
+    response: {
+      success: true,
+      message: 'Bin deactivation initiated. ESP32 will process session data.',
+      data: {
+        binId: 'string',
+        status: 'deactivation_pending',
+        commandSet: true
+      }
+    },
+    note: 'This sets a command for ESP32 to deactivate and send session data to /api/bins/session-data'
   });
 }

@@ -113,17 +113,42 @@ BIN_ACTIVATED
 ```http
 POST https://your-domain.com/api/bins/deactivate
 Content-Type: application/json
-Authorization: Bearer {user_token}
 ```
 
 **Payload:**
 ```json
 {
-  "binId": "bin_001",
   "userId": "abc123xyz789",
-  "sessionId": "session_abc123"
+  "sessionData": {
+    "plasticCount": 3,
+    "tinCount": 2,
+    "rejectedCount": 1,
+    "sessionId": "session_abc123"
+  }
 }
 ```
+
+**Headers:**
+```
+X-API-Key: BIN_LK3M9Q_H7G8J9K2L4M5N6P8Q
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| userId | string | Yes | The user ID who activated the bin |
+| sessionData | object | No | Session recycling data from ESP32 |
+| sessionData.plasticCount | number | No | Number of plastic bottles detected |
+| sessionData.tinCount | number | No | Number of tin cans detected |
+| sessionData.rejectedCount | number | No | Number of rejected items |
+| sessionData.sessionId | string | No | Session identifier |
+
+**Headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| X-API-Key | Yes | The unique API key for the bin |
 
 ### Response
 
@@ -133,13 +158,22 @@ Authorization: Bearer {user_token}
   "success": true,
   "message": "Bin deactivated successfully",
   "data": {
-    "binId": "bin_001",
-    "status": "inactive",
-    "sessionDuration": 180,
-    "totalPoints": 150,
-    "itemsRecycled": 3,
-    "deactivatedAt": "2025-11-10T08:33:00Z"
+    "pointsAwarded": 5,
+    "sessionProcessed": true
+  },
+  "bin": {
+    "id": "uTnM9cFUDMfRVF8GbaiN",
+    "name": "Test Bin",
+    "status": "inactive"
   }
+}
+```
+
+**Error (400 - Missing Fields):**
+```json
+{
+  "success": false,
+  "error": "Missing required fields: apiKey, userId"
 }
 ```
 
@@ -147,8 +181,16 @@ Authorization: Bearer {user_token}
 ```json
 {
   "success": false,
-  "error": "Unauthorized to deactivate this bin",
-  "code": "UNAUTHORIZED_DEACTIVATION"
+  "error": "You are not authorized to deactivate this bin",
+  "currentUser": "different_user_id"
+}
+```
+
+**Error (404 - Bin Not Found):**
+```json
+{
+  "success": false,
+  "error": "Bin not found"
 }
 ```
 
@@ -260,15 +302,14 @@ export const activateBin = async (binId, userId, location) => {
 };
 
 // DEACTIVATE BIN
-export const deactivateBin = async (binId, userId, sessionId) => {
+export const deactivateBin = async (apiKey, userId, userEmail) => {
   try {
     const response = await axios.post(`${API_BASE_URL}/bins/deactivate`, {
-      binId: binId,
+      apiKey: apiKey,
       userId: userId,
-      sessionId: sessionId
+      userEmail: userEmail
     }, {
       headers: {
-        'Authorization': `Bearer ${getAuthToken()}`,
         'Content-Type': 'application/json'
       }
     });
@@ -353,17 +394,17 @@ class BinService {
 
   // DEACTIVATE BIN
   Future<Map<String, dynamic>> deactivateBin({
-    required String binId,
+    required String apiKey,
     required String userId,
-    required String sessionId,
   }) async {
     final response = await http.post(
       Uri.parse('$baseUrl/bins/deactivate'),
-      headers: _headers,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': apiKey,
+      },
       body: jsonEncode({
-        'binId': binId,
         'userId': userId,
-        'sessionId': sessionId,
       }),
     );
 
@@ -433,10 +474,13 @@ const unsigned long BIN_SESSION_TIMEOUT = 300000;  // milliseconds
 | 4 | App sends to ESP32-CAM | - | `ACTIVATE_BIN:userId:sessionId` | - |
 | 5 | ESP32-CAM forwards | - | → ESP32 Control Board | - |
 | 6 | ESP32 unlocks | - | - | 🟢 **BIN ACTIVE** |
-| 7 | User recycles | - | - | IR active, servos ready |
-| 8 | User finishes | `POST /bins/deactivate` | - | - |
-| 9 | App sends to ESP32-CAM | - | `DEACTIVATE_BIN` | - |
-| 10 | ESP32 locks | - | - | 🔴 **BIN LOCKED** |
+| 7 | User inserts item | - | ESP32 counts items | IR active, servos ready |
+| 8 | ESP32 processes item | - | Increments counters | Items sorted |
+| 9 | User finishes | `POST /bins/deactivate` | - | - |
+| 10 | ESP32 sends session data | Session data included | - | - |
+| 11 | Server calculates points | Points awarded | - | - |
+| 12 | ESP32-CAM | - | `DEACTIVATE_BIN` | - |
+| 13 | ESP32 locks | - | - | 🔴 **BIN LOCKED** |
 
 ---
 
@@ -451,7 +495,7 @@ const unsigned long BIN_SESSION_TIMEOUT = 300000;  // milliseconds
 ### Deactivation
 - ✅ Ends user session
 - ✅ Locks all hardware functions
-- ✅ Returns session summary (points, items)
+- ✅ Calculates and awards points based on session data
 - ✅ Frees bin for next user
 
 ### Auto-Timeout
@@ -484,10 +528,30 @@ curl -X POST https://your-domain.com/api/bins/activate \
 ```bash
 curl -X POST https://your-domain.com/api/bins/deactivate \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "apiKey": "BIN_LK3M9Q_H7G8J9K2L4M5N6P8Q",
+    "userId": "test_user_123",
+    "userEmail": "test@example.com"
+  }'
+```
+
+### Test Recycling Transaction (ESP32 → Server)
+```bash
+curl -X POST https://your-domain.com/api/iot/recycle \
+  -H "Content-Type: application/json" \
+  -H "X-Device-ID: bin_001" \
+  -H "X-Device-Secret: your_secret" \
   -d '{
     "binId": "bin_001",
     "userId": "test_user_123",
+    "materialType": "plastic",
+    "weight": 0.5,
+    "quantity": 1,
+    "location": {
+      "latitude": 14.5995,
+      "longitude": 120.9842
+    },
+    "timestamp": "2025-11-10T08:30:20Z",
     "sessionId": "session_abc123"
   }'
 ```
@@ -496,21 +560,63 @@ curl -X POST https://your-domain.com/api/bins/deactivate \
 
 ## 📝 Notes for Backend Implementation
 
-When implementing these endpoints, ensure:
+When implementing the deactivate endpoint, ensure:
 
-1. **Firestore Update** on activation:
+1. **API Key Validation**:
    ```javascript
-   await updateDoc(doc(db, 'bins', binId), {
-     status: 'active',
-     currentUser: userId,
-     sessionId: sessionId,
-     activatedAt: serverTimestamp()
-   });
+   const bin = await adminService.getBinByApiKey(apiKey);
+   if (!bin) {
+     return { error: 'Bin not found' };
+   }
    ```
 
-2. **Firestore Update** on deactivation:
+2. **User Authorization Check**:
    ```javascript
-   await updateDoc(doc(db, 'bins', binId), {
+   if (bin.currentUser !== userId) {
+     return { error: 'You are not authorized to deactivate this bin' };
+   }
+   ```
+
+3. **Points Calculation** (if sessionData provided):
+   ```javascript
+   // 50 plastic bottles = 1 point
+   const plasticPoints = Math.floor(sessionData.plasticCount / 50);
+   
+   // 10 tin cans = 1 point  
+   const tinPoints = Math.floor(sessionData.tinCount / 10);
+   
+   const totalPoints = plasticPoints + tinPoints;
+   ```
+
+**Points Calculation:** Points are calculated and awarded during deactivation based on session data sent by the ESP32.
+
+**Session Data Processing** (`/bins/deactivate` endpoint):
+```javascript
+// Process session data from ESP32
+if (sessionData) {
+  const { plasticCount, tinCount, rejectedCount } = sessionData;
+  
+  // Get current pricing configuration
+  const pricing = await adminService.getCurrentPricing();
+  
+  // Calculate points
+  const plasticPoints = Math.floor(plasticCount / pricing.plastic); // items per point
+  const tinPoints = Math.floor(tinCount / pricing.glass); // items per point
+  const totalPoints = plasticPoints + tinPoints;
+  
+  // Award points to user
+  if (totalPoints > 0) {
+    await adminService.addUserPoints(userId, totalPoints);
+  }
+  
+  // Log recycling activities
+  // ... log each material type separately
+}
+```
+
+4. **Firestore Update** on deactivation:
+   ```javascript
+   await updateDoc(doc(db, 'bins', bin.id), {
      status: 'inactive',
      currentUser: null,
      sessionId: null,
@@ -518,17 +624,16 @@ When implementing these endpoints, ensure:
    });
    ```
 
-3. **Session Tracking**:
+5. **Activity Logging**:
    ```javascript
-   await addDoc(collection(db, 'sessions'), {
-     binId: binId,
+   await addDoc(collection(db, 'userActivities'), {
      userId: userId,
-     sessionId: sessionId,
-     startTime: activatedAt,
-     endTime: deactivatedAt,
-     duration: durationSeconds,
-     totalPoints: pointsEarned,
-     itemsRecycled: itemCount
+     email: userEmail,
+     action: 'Bin Deactivate',
+     description: `Deactivated bin: ${bin.name}`,
+     binId: bin.id,
+     binName: bin.name,
+     timestamp: serverTimestamp()
    });
    ```
 
@@ -536,8 +641,18 @@ When implementing these endpoints, ensure:
 
 ## ✅ Conclusion
 
-These **2 simple APIs** control the entire bin access system:
-- `POST /bins/activate` - Connect user to bin
-- `POST /bins/deactivate` - Disconnect user from bin
+These **2 APIs** control the entire bin access system:
+- `POST /bins/activate` - Connect user to bin (returns sessionId)
+- `POST /bins/deactivate` - Disconnect user from bin (processes session data and awards points)
+
+**Key Differences:**
+- **Activate**: Uses `binId`, returns `sessionId` for ESP32 communication
+- **Deactivate**: Uses `X-API-Key` header and `userId`, processes session data from ESP32
+- **Session-Based**: ESP32 counts materials during session, sends totals on deactivate
+
+**Correct Architecture:**
+- Mobile app handles user authentication and bin access control
+- ESP32 microcontroller handles item detection, classification, and session counting
+- Points are awarded when user disconnects, based on accumulated session data
 
 Combined with serial commands to ESP32, they provide complete session management for your smart recycling bin system.
