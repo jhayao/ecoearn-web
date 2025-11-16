@@ -99,11 +99,11 @@
 // ============================================
 
 // WiFi credentials
-// const char* WIFI_SSID = "FTTx-807a60";
+// const char* WIFI_SSID = "FTTx-ZTE_1294C5";
 // const char* WIFI_PASSWORD = "mark0523";
 
-const char* WIFI_SSID = "Xiaomi_53DE";
-const char* WIFI_PASSWORD = "hayao1014";
+const char* WIFI_SSID = "ZTE_1294C5";
+const char* WIFI_PASSWORD = "1234567890";
 
 // API Configuration - UPDATE THESE FOR YOUR NETWORK
 const char* API_KEY = "BIN_MHSEHCF4_MH8NQIUUXEQVFVP30VU2M";  // Replace with your bin's API key
@@ -112,7 +112,7 @@ const char* BIN_ID = "BIN_MHSEHCF4_MH8NQIUUXEQVFVP30VU2M";    // Bin ID (same as
 // SERVER IP: Update this to your computer's local IP address (run 'ipconfig' on Windows or 'ifconfig' on Linux/Mac)
 // Example: If your computer IP is 192.168.1.100, use "192.168.1.100"
 // DO NOT use localhost/127.0.0.1 - ESP32 cannot connect to that
-const char* SERVER_IP = "192.168.31.196";  // ← CHANGE THIS TO YOUR COMPUTER'S IP
+const char* SERVER_IP = "192.168.0.17";  // ← CHANGE THIS TO YOUR COMPUTER'S IP
 const int SERVER_PORT = 3000;
 
 // Construct URLs at runtime (can't concatenate const char* at compile time)
@@ -559,11 +559,13 @@ void loop() {
   }
   
   // Update capacity readings periodically
-  if (currentTime - lastCapacityUpdateTime >= CAPACITY_UPDATE_INTERVAL) {
-    updateCapacityReadings();
-    updateCapacityToServer();
-    lastCapacityUpdateTime = currentTime;
-  }
+  // REMOVED: Automatic capacity updates disabled
+  // Capacity will only be updated when user disconnects
+  // if (currentTime - lastCapacityUpdateTime >= CAPACITY_UPDATE_INTERVAL) {
+  //   updateCapacityReadings();
+  //   updateCapacityToServer();
+  //   lastCapacityUpdateTime = currentTime;
+  // }
   
   // Send heartbeat to server periodically (ONLY when bin is NOT activated)
   // Skip heartbeat when user is active to avoid interfering with trash detection
@@ -1253,6 +1255,11 @@ void deactivateBin() {
   digitalWrite(LED_PIN, LOW);
   
   Serial.println("✓ All systems reset to standby mode\n");
+  
+  // FINAL CAPACITY UPDATE ON USER DISCONNECT
+  Serial.println("📊 Updating final capacity readings...");
+  updateCapacityReadings();
+  updateCapacityToServer();
   
   ESP32_CAM_SERIAL.println("BIN_DEACTIVATED");
 }

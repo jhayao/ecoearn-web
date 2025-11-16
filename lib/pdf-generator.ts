@@ -511,7 +511,9 @@ export class PDFReportGenerator {
         }
         
         this.doc.setFontSize(9);
-        this.doc.text(cell, x + 2, y + 5);
+        // Ensure cell value is a valid string, handle null/undefined values
+        const cellText = cell == null ? 'N/A' : String(cell);
+        this.doc.text(cellText, x + 2, y + 5);
       });
     });
 
@@ -661,7 +663,7 @@ export async function fetchComprehensiveData(selectedYear: number): Promise<Dash
   try {
     const adminService = new AdminService();
     
-    // Fetch all required data
+    // Fetch all required data with error handling
     const [
       userStats,
       recyclingStats,
@@ -672,67 +674,140 @@ export async function fetchComprehensiveData(selectedYear: number): Promise<Dash
       pricing,
       activityLogs
     ] = await Promise.all([
-      adminService.getUserStats(),
-      adminService.getTotalRecyclingStats(),
-      adminService.getReportsByYear(selectedYear),
-      adminService.getRecentRecycles(),
-      adminService.getBinsByYear(selectedYear),
-      adminService.getMonthlyRecyclingStats(selectedYear),
-      adminService.getCurrentPricing(),
-      adminService.getActivityLogsByYear(selectedYear)
+      adminService.getUserStats().catch(err => {
+        console.error('Error fetching user stats:', err);
+        return { totalUsers: 0, activeUsers: 0, inactiveUsers: 0 };
+      }),
+      adminService.getTotalRecyclingStats().catch(err => {
+        console.error('Error fetching recycling stats:', err);
+        return { plastic: 0, glass: 0 };
+      }),
+      adminService.getReportsByYear(selectedYear).catch(err => {
+        console.error('Error fetching user reports:', err);
+        return [];
+      }),
+      adminService.getRecentRecycles().catch(err => {
+        console.error('Error fetching recent recycles:', err);
+        return [];
+      }),
+      adminService.getBinsByYear(selectedYear).catch(err => {
+        console.error('Error fetching bin information:', err);
+        return [];
+      }),
+      adminService.getMonthlyRecyclingStats(selectedYear).catch(err => {
+        console.error('Error fetching monthly data:', err);
+        return { plastic: { data: new Array(12).fill(0), users: new Array(12).fill(0) }, glass: { data: new Array(12).fill(0), users: new Array(12).fill(0) } };
+      }),
+      adminService.getCurrentPricing().catch(err => {
+        console.error('Error fetching pricing:', err);
+        return null;
+      }),
+      adminService.getActivityLogsByYear(selectedYear).catch(err => {
+        console.error('Error fetching activity logs:', err);
+        return [];
+      })
     ]);
 
-    // Process user reports
-    const processedUserReports = userReports.map(report => ({
-      username: report.userName,
-      date: report.timestamp.toDate().toLocaleDateString(),
-      time: report.timestamp.toDate().toLocaleTimeString(),
-      description: report.description,
-      location: report.location,
-      upload: report.image ? 'Yes' : 'No'
-    }));
-
-    // Process recent recycles
-    const processedRecentRecycles = recentRecycles.map(recycle => ({
-      username: recycle.userName,
-      date: `${recycle.timestamp.toDate().toLocaleDateString()} | ${recycle.timestamp.toDate().toLocaleTimeString()}`,
-      material: recycle.materialType
-    }));
-
-    // Process bin information
-    const processedBinInformation = binInformation.map(bin => ({
-      binName: bin.name,
-      latitude: bin.lat || 0,
-      longitude: bin.lng || 0,
-      binLevel: bin.level || 0
-    }));
-
-    // Process monthly data
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const processedMonthlyData = months.map((month, index) => ({
-      month,
-      plasticBottles: monthlyData.plastic.data[index] || 0,
-      tinCans: monthlyData.glass.data[index] || 0
-    }));
-
-    // Process pricing
-    const processedPricing = pricing ? {
-      plasticBottle: `${pricing.plastic} points = 1 PHP`,
-      tinCan: `${pricing.glass} points = 1 PHP`
-    } : {
-      plasticBottle: "1 points = 1 PHP",
-      tinCan: "1 points = 1 PHP"
+    // Process data with error handling
+    let processedUserReports: Array<{
+      username: string;
+      date: string;
+      time: string;
+      description: string;
+      location: string;
+      upload: string;
+    }>;
+    let processedRecentRecycles: Array<{
+      username: string;
+      date: string;
+      material: string;
+    }>;
+    let processedBinInformation: Array<{
+      binName: string;
+      latitude: number;
+      longitude: number;
+      binLevel: number;
+    }>;
+    let processedMonthlyData: Array<{
+      month: string;
+      plasticBottles: number;
+      tinCans: number;
+    }>;
+    let processedPricing: {
+      plasticBottle: string;
+      tinCan: string;
     };
+    let processedActivityLogs: Array<{
+      email: string;
+      ipAddress: string;
+      date: string;
+      time: string;
+      action: string;
+      description: string;
+    }>;
+    
+    try {
+      // Process user reports
+      processedUserReports = userReports.map(report => ({
+        username: report.userName || 'Unknown User',
+        date: report.timestamp?.toDate().toLocaleDateString() || 'N/A',
+        time: report.timestamp?.toDate().toLocaleTimeString() || 'N/A',
+        description: report.description || 'No description',
+        location: report.location || 'No location',
+        upload: report.image ? 'Yes' : 'No'
+      }));
 
-    // Process activity logs
-    const processedActivityLogs = activityLogs.map(log => ({
-      email: log.email,
-      ipAddress: log.ipAddress,
-      date: log.date,
-      time: log.time,
-      action: log.action,
-      description: log.description
-    }));
+      // Process recent recycles
+      processedRecentRecycles = recentRecycles.map(recycle => ({
+        username: recycle.userName || 'Unknown User',
+        date: recycle.timestamp ? `${recycle.timestamp.toDate().toLocaleDateString()} | ${recycle.timestamp.toDate().toLocaleTimeString()}` : 'N/A',
+        material: recycle.materialType || 'Unknown'
+      }));
+
+      // Process bin information
+      processedBinInformation = binInformation.map(bin => ({
+        binName: bin.name || 'Unknown Bin',
+        latitude: bin.lat || 0,
+        longitude: bin.lng || 0,
+        binLevel: bin.level || 0
+      }));
+
+      // Process monthly data
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      processedMonthlyData = months.map((month, index) => ({
+        month,
+        plasticBottles: monthlyData?.plastic?.data?.[index] || 0,
+        tinCans: monthlyData?.glass?.data?.[index] || 0
+      }));
+
+      // Process pricing
+      processedPricing = pricing ? {
+        plasticBottle: `${pricing.plastic || 1} points = 1 PHP`,
+        tinCan: `${pricing.glass || 1} points = 1 PHP`
+      } : {
+        plasticBottle: "1 points = 1 PHP",
+        tinCan: "1 points = 1 PHP"
+      };
+
+      // Process activity logs
+      processedActivityLogs = activityLogs.map(log => ({
+        email: log.email || 'Unknown',
+        ipAddress: log.ipAddress || 'N/A',
+        date: log.date || 'N/A',
+        time: log.time || 'N/A',
+        action: log.action || 'Unknown',
+        description: log.description || 'No description'
+      }));
+    } catch (processingError) {
+      console.error('Error processing data:', processingError);
+      // Use default data if processing fails
+      processedUserReports = [];
+      processedRecentRecycles = [];
+      processedBinInformation = [];
+      processedMonthlyData = [];
+      processedPricing = { plasticBottle: "1 points = 1 PHP", tinCan: "1 points = 1 PHP" };
+      processedActivityLogs = [];
+    }
 
     // Create bar chart data
     const barChartData = [

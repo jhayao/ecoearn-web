@@ -25,11 +25,13 @@
 // const char* ssid = "FTTx-807a60";
 // const char* password = "mark0523";
 
-const char* ssid = "Xiaomi_53DE";
-const char* password = "hayao1014";
+const char* ssid = "ZTE_1294C5";
+const char* password = "1234567890";
 
 // Backend Server URL
 const char* IDENTIFICATION_BACKEND_URL = "http://213.35.114.162:5001/identify/material";
+
+// const char* IDENTIFICATION_BACKEND_URL = "http://192.168.31.196:5001/identify/material";
 
 // ESP32 Main Board Serial
 #define ESP32_SERIAL Serial
